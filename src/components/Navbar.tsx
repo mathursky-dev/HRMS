@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Users,
   ChevronDown,
-  RotateCcw,
   Sun,
   Moon,
   LogOut,
@@ -41,7 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
     candidates, 
     followUps, 
     interviews, 
-    resetAllData,
     companies,
     activeCompanyId,
     setActiveCompanyId,
@@ -370,21 +368,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                         Log Out / Lock Workspace
                       </span>
                       <span className="text-[9px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">Lock</span>
-                    </button>
-
-                    <button
-                      id="btn-nav-reset-demo-data"
-                      onClick={() => {
-                        if (confirm('Are you sure you want to reset all CRM dummy data back to default factory state?')) {
-                          resetAllData();
-                          setShowRoleDropdown(false);
-                          alert('All dummy data (candidates, jobs, users, companies, offer letters) has been reset to default state.');
-                        }
-                      }}
-                      className="w-full text-left py-1.5 px-2 text-[11px] text-amber-400 hover:text-amber-300 hover:bg-amber-950/30 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Reset Dummy Data to Default</span>
                     </button>
                   </div>
                 </div>

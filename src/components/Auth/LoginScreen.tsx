@@ -1,36 +1,19 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Lock, Eye, EyeOff, ArrowRight, Loader2, AlertCircle, KeyRound, ChevronDown, ChevronUp, RotateCcw, CheckCircle2 } from 'lucide-react';
+import { User, Lock, Eye, EyeOff, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 
 export const LoginScreen: React.FC = () => {
-  const { loginWithCredentials, companies, allUsers, resetAllData } = useRecruitment();
+  const { loginWithCredentials, companies } = useRecruitment();
 
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [showDemoAccounts, setShowDemoAccounts] = useState(false);
-  const [resetSuccessMsg, setResetSuccessMsg] = useState('');
 
   // Primary company info for branding
   const companyName = companies[0]?.name || 'Essential Soul Lifestyle';
-
-  const handleResetDemoData = () => {
-    resetAllData();
-    setUserId('');
-    setPassword('');
-    setErrorMsg('');
-    setResetSuccessMsg('All demo data has been reset to factory defaults.');
-    setTimeout(() => setResetSuccessMsg(''), 4000);
-  };
-
-  const handleSelectDemo = (uId: string, pwd: string) => {
-    setUserId(uId);
-    setPassword(pwd);
-    setErrorMsg('');
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,18 +71,6 @@ export const LoginScreen: React.FC = () => {
             >
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
               <span>{errorMsg}</span>
-            </motion.div>
-          )}
-
-          {resetSuccessMsg && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
-              <span>{resetSuccessMsg}</span>
             </motion.div>
           )}
         </AnimatePresence>
@@ -183,80 +154,6 @@ export const LoginScreen: React.FC = () => {
             )}
           </button>
         </form>
-
-        {/* Quick Demo Credentials Helper */}
-        <div className="mt-6 pt-5 border-t border-slate-200/80 dark:border-slate-800">
-          <button
-            type="button"
-            onClick={() => setShowDemoAccounts(!showDemoAccounts)}
-            className="w-full flex items-center justify-between text-xs font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors cursor-pointer"
-          >
-            <span className="flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5 text-blue-500" />
-              <span>Available Demo Credentials</span>
-            </span>
-            {showDemoAccounts ? (
-              <ChevronUp className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5" />
-            )}
-          </button>
-
-          <AnimatePresence>
-            {showDemoAccounts && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mt-3 space-y-2 overflow-hidden"
-              >
-                <p className="text-[11px] text-slate-400 dark:text-slate-400 mb-2">
-                  Click any account below to auto-fill its registered User ID and Password:
-                </p>
-                <div className="grid grid-cols-1 gap-1.5">
-                  {allUsers.slice(0, 4).map((user) => {
-                    const uPass = user.password || `${user.name.split(' ')[0]}@2026`;
-                    const uId = user.userId || user.email;
-                    return (
-                      <button
-                        key={user.id}
-                        type="button"
-                        onClick={() => handleSelectDemo(uId, uPass)}
-                        className="text-left p-2 rounded-lg bg-slate-50 hover:bg-blue-50/80 dark:bg-slate-950 dark:hover:bg-slate-800/80 border border-slate-200/80 dark:border-slate-800 transition-colors cursor-pointer group"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                            {user.name}
-                          </span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium">
-                            {user.role}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                          ID: <span className="text-slate-600 dark:text-slate-300 font-semibold">{uId}</span> • Pass: <span className="text-slate-600 dark:text-slate-300 font-semibold">{uPass}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Direct Reset Dummy Data Option */}
-          <div className="mt-4 pt-3 border-t border-slate-200/60 dark:border-slate-800 flex items-center justify-center">
-            <button
-              id="btn-login-reset-dummy-data"
-              type="button"
-              onClick={handleResetDemoData}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-slate-500 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-950/30 transition-colors cursor-pointer"
-              title="Reset all CRM records (candidates, jobs, users, companies) back to factory default"
-            >
-              <RotateCcw className="w-3 h-3 text-amber-500" />
-              <span>Reset Dummy Data to Factory Defaults</span>
-            </button>
-          </div>
-        </div>
 
       </motion.div>
 

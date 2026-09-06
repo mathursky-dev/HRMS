@@ -429,6 +429,52 @@ async function startServer() {
     }
   });
 
+  // 6. Direct Source Code Sync for Companies (updates src/mockData.ts)
+  app.post('/api/companies/sync-source', (req, res) => {
+    try {
+      const { companies } = req.body || {};
+      if (!Array.isArray(companies)) {
+        return res.status(400).json({ success: false, error: 'Expected an array of companies' });
+      }
+
+      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
+      if (!fs.existsSync(mockDataPath)) {
+        return res.status(404).json({ success: false, error: 'src/mockData.ts not found' });
+      }
+
+      let content = fs.readFileSync(mockDataPath, 'utf8');
+
+      // Replace INITIAL_COMPANIES array in src/mockData.ts
+      const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*\[[\s\S]*?\n\];/;
+      const formattedArray = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(companies, null, 2) + ';';
+
+      if (regex.test(content)) {
+        content = content.replace(regex, formattedArray);
+        fs.writeFileSync(mockDataPath, content, 'utf8');
+        console.log(`[Source Code Sync] Updated src/mockData.ts with ${companies.length} companies.`);
+        return res.json({ 
+          success: true, 
+          message: `Successfully synchronized ${companies.length} company records to src/mockData.ts`,
+          count: companies.length 
+        });
+      } else {
+        return res.status(500).json({ success: false, error: 'Could not match INITIAL_COMPANIES declaration in src/mockData.ts' });
+      }
+    } catch (err: any) {
+      console.error('Error syncing companies to source code:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to update source file' });
+    }
+  });
+
+  app.get('/api/companies/sync-status', (req, res) => {
+    const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
+    if (!fs.existsSync(mockDataPath)) {
+      return res.json({ exists: false });
+    }
+    const stat = fs.statSync(mockDataPath);
+    return res.json({ exists: true, lastModified: stat.mtime });
+  });
+
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

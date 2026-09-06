@@ -25,7 +25,9 @@ import {
   Sparkles,
   Lock,
   Send,
-  ExternalLink
+  ExternalLink,
+  FileCode,
+  Save
 } from 'lucide-react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 import { Company } from '../../types';
@@ -42,7 +44,8 @@ export const CompanyMaster: React.FC = () => {
     departmentsList,
     candidates,
     jobOpenings,
-    setCurrentUser 
+    setCurrentUser,
+    syncCompaniesToSourceCode
   } = useRecruitment();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -52,6 +55,25 @@ export const CompanyMaster: React.FC = () => {
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null);
   const [notificationToast, setNotificationToast] = useState<{ type: 'success' | 'info'; message: string } | null>(null);
+  const [isSyncingSource, setIsSyncingSource] = useState(false);
+
+  const handleManualSyncSource = async () => {
+    setIsSyncingSource(true);
+    const res = await syncCompaniesToSourceCode();
+    setIsSyncingSource(false);
+    if (res.success) {
+      setNotificationToast({
+        type: 'success',
+        message: 'Source code (src/mockData.ts) synchronized with all company records!',
+      });
+    } else {
+      setNotificationToast({
+        type: 'info',
+        message: res.message || 'Could not sync to source code.',
+      });
+    }
+    setTimeout(() => setNotificationToast(null), 4500);
+  };
 
   // Card Credentials helper states
   const [visibleCardPasswords, setVisibleCardPasswords] = useState<Record<string, boolean>>({});
@@ -225,6 +247,11 @@ export const CompanyMaster: React.FC = () => {
     }
 
     setIsAddModalOpen(false);
+    setNotificationToast({
+      type: 'success',
+      message: `Company details saved and updated in source code (src/mockData.ts).`,
+    });
+    setTimeout(() => setNotificationToast(null), 4500);
   };
 
   const handleDelete = (id: string, name: string) => {
@@ -301,6 +328,26 @@ export const CompanyMaster: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            id="btn-sync-companies-source"
+            onClick={handleManualSyncSource}
+            disabled={isSyncingSource}
+            className="inline-flex items-center space-x-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-60 text-white px-3 py-2 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            title="Save and write current company records directly to src/mockData.ts in source code"
+          >
+            {isSyncingSource ? (
+              <>
+                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>Syncing to Source...</span>
+              </>
+            ) : (
+              <>
+                <FileCode className="w-4 h-4 text-emerald-100" />
+                <span>Sync to Source Code</span>
+              </>
+            )}
+          </button>
+
           <button
             id="btn-company-credentials-master"
             onClick={() => setIsCredentialsMasterOpen(true)}

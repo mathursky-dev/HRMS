@@ -84,6 +84,7 @@ interface RecruitmentContextType {
   updateCompany: (id: string, updates: Partial<Company>) => void;
   deleteCompany: (id: string) => void;
   bulkImportCompanies: (companiesToImport: Array<Omit<Company, 'id' | 'createdAt'>>, skipExisting?: boolean) => { importedCount: number; skippedCount: number };
+  syncCompaniesToSourceCode: (companiesToSync?: Company[]) => Promise<{ success: boolean; message: string }>;
 
   // Departments (Department Master)
   departmentsList: DepartmentItem[];
@@ -441,8 +442,28 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return INITIAL_COMPANIES;
   });
 
+  const syncCompaniesToSourceCode = async (companiesToSync?: Company[]): Promise<{ success: boolean; message: string }> => {
+    const payload = companiesToSync || companies;
+    try {
+      const res = await fetch('/api/companies/sync-source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companies: payload }),
+      });
+      const data = await res.json();
+      return data;
+    } catch (err: any) {
+      console.warn('Could not sync companies to source code:', err);
+      return { success: false, message: err?.message || 'Network error' };
+    }
+  };
+
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(companies));
+    // Persist to source code (src/mockData.ts) automatically so code matches preview edits
+    if (companies && companies.length > 0) {
+      syncCompaniesToSourceCode(companies).catch(() => {});
+    }
   }, [companies]);
 
   const [activeCompanyId, setActiveCompanyIdState] = useState<string>(() => {
@@ -474,6 +495,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const updated = prev.filter(c => c.id !== id);
       try {
         localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(updated));
+        syncCompaniesToSourceCode(updated).catch(() => {});
       } catch (e) {
         console.warn('Could not persist deleted company:', e);
       }
@@ -1328,6 +1350,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updateCompany,
         deleteCompany,
         bulkImportCompanies,
+        syncCompaniesToSourceCode,
         departmentsList,
         addDepartment,
         updateDepartment,

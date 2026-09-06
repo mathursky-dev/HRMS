@@ -56,7 +56,8 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
     offerLetters, 
     targetSettings, 
     termsClauses,
-    auditLogs
+    auditLogs,
+    refreshFromSupabase
   } = useRecruitment();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'schema' | 'sync' | 'config'>('overview');
@@ -761,18 +762,11 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                 onClick={async () => {
                   setIsSyncing(true);
                   try {
-                    const res = await fetchDatasetFromSupabase();
-                    if (res.success && res.data) {
-                      setSyncResult({
-                        success: true,
-                        message: 'Data successfully loaded from Supabase!'
-                      });
-                    } else {
-                      setSyncResult({
-                        success: false,
-                        message: res.error || 'Failed to fetch data from Supabase'
-                      });
-                    }
+                    const res = await refreshFromSupabase();
+                    setSyncResult({
+                      success: res.success,
+                      message: res.message
+                    });
                   } finally {
                     setIsSyncing(false);
                   }

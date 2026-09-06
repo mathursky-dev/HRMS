@@ -99,8 +99,8 @@ let currentSupabaseUrl = normalizeUrl(
 );
 let currentSupabaseKey = normalizeKey(
   saved.key ||
-  process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_KEY ||
   DEFAULT_SUPABASE_KEY
 );
@@ -341,10 +341,101 @@ async function startServer() {
     const syncedCounts: Record<string, number> = {};
     const errors: string[] = [];
 
+    // Conversion helpers between TypeScript CRM interfaces and Supabase PostgreSQL schema
+    function candidateToDb(c: any) {
+      if (!c) return null;
+      return {
+        id: c.id,
+        full_name: c.fullName || c.full_name || '',
+        mobile_number: c.mobileNumber || c.mobile_number || '',
+        whatsapp_number: c.whatsappNumber || c.whatsapp_number || c.mobileNumber || '',
+        gender: c.gender || null,
+        age: c.age || null,
+        date_of_birth: c.dateOfBirth || c.date_of_birth || null,
+        email: c.email || null,
+        city: c.city || null,
+        area: c.area || null,
+        address: c.address || null,
+        position_applied: c.positionApplied || c.position_applied || '',
+        department: c.department || '',
+        company_id: c.companyId || c.company_id || null,
+        company_name: c.companyName || c.company_name || null,
+        qualification: c.qualification || null,
+        total_experience: c.totalExperience || c.total_experience || null,
+        relevant_experience: c.relevantExperience || c.relevant_experience || null,
+        current_company: c.currentCompany || c.current_company || null,
+        current_salary: c.currentSalary !== undefined ? c.currentSalary : (c.current_salary || null),
+        expected_salary: c.expectedSalary !== undefined ? c.expectedSalary : (c.expected_salary || null),
+        salary_offered: c.salaryOffered !== undefined ? c.salaryOffered : (c.salary_offered || null),
+        notice_period: c.noticePeriod || c.notice_period || null,
+        preferred_location: c.preferredLocation || c.preferred_location || null,
+        candidate_source: c.candidateSource || c.candidate_source || 'Indeed',
+        assigned_hr: c.assignedHr || c.assigned_hr || 'Nandani',
+        remarks: c.remarks || null,
+        status: c.status || 'New Lead',
+        is_active_joining: Boolean(c.isActiveJoining ?? c.is_active_joining),
+        active_joining_date: c.activeJoinedDate || c.active_joining_date || null,
+        joining_date: c.joiningDate || c.joining_date || null,
+        interview_date: c.interviewDate || c.interview_date || null,
+        offer_letter_issued: Boolean(c.offerLetterIssued ?? c.offer_letter_issued),
+        first_call_date: c.firstCallDate || c.first_call_date || null,
+        last_activity_date: c.lastActivityDate || c.last_activity_date || new Date().toISOString(),
+        created_at: c.createdAt || c.created_at || new Date().toISOString(),
+        updated_at: c.updatedAt || c.updated_at || new Date().toISOString(),
+      };
+    }
+
+    function followUpToDb(f: any) {
+      if (!f) return null;
+      return {
+        id: f.id,
+        candidate_id: f.candidateId || f.candidate_id,
+        scheduled_date: f.followUpDate || f.scheduled_date,
+        scheduled_time: f.followUpTime || f.scheduled_time || '11:00',
+        type: f.followUpMode || f.type || 'Call',
+        notes: f.notes || f.candidateResponse || '',
+        completed: Boolean(f.isCompleted ?? f.completed),
+        conducted_by: f.hrExecutive || f.conducted_by || 'Nandani',
+        outcome: f.resultingStatus || f.outcome || 'Follow-up',
+        next_follow_up_date: f.nextFollowUpDate || f.next_follow_up_date || null,
+        created_at: f.createdAt || f.created_at || new Date().toISOString(),
+      };
+    }
+
+    function interviewToDb(i: any) {
+      if (!i) return null;
+      return {
+        id: i.id,
+        candidate_id: i.candidateId || i.candidate_id,
+        candidate_name: i.candidateName || i.candidate_name || '',
+        candidate_phone: i.candidateMobile || i.candidate_phone || '',
+        candidate_role: i.position || i.candidate_role || '',
+        scheduled_date: i.interviewDate || i.scheduled_date,
+        scheduled_time: i.interviewTime || i.scheduled_time || '11:00',
+        round: i.round || 'Initial Round',
+        interviewer_name: i.interviewer || i.interviewer_name || 'Vikram Singh',
+        interviewer_role: i.interviewer_role || 'Interviewer',
+        status: i.attendanceStatus || i.status || 'Scheduled',
+        attendance_status: i.attendanceStatus || i.attendance_status || 'Scheduled',
+        evaluation: i.evaluation || null,
+        notes: i.remarks || i.notes || '',
+        created_at: i.createdAt || i.created_at || new Date().toISOString(),
+      };
+    }
+
     async function upsertBatch(tableName: string, rows: any[]) {
       if (!rows || rows.length === 0) return;
       try {
-        const { error } = await client!.from(tableName).upsert(rows, { onConflict: 'id' });
+        let transformedRows = rows;
+        if (tableName === 'candidates') {
+          transformedRows = rows.map(candidateToDb).filter(Boolean);
+        } else if (tableName === 'follow_ups') {
+          transformedRows = rows.map(followUpToDb).filter(Boolean);
+        } else if (tableName === 'interviews') {
+          transformedRows = rows.map(interviewToDb).filter(Boolean);
+        }
+
+        const { error } = await client!.from(tableName).upsert(transformedRows, { onConflict: 'id' });
         if (error) {
           errors.push(`${tableName}: ${error.message}`);
         } else {
@@ -386,16 +477,16 @@ async function startServer() {
 
     try {
       const [
-        { data: companies },
-        { data: departments },
-        { data: users },
-        { data: candidates },
-        { data: jobOpenings },
-        { data: interviews },
-        { data: followUps },
-        { data: offerLetters },
-        { data: targetSettings },
-        { data: termsClauses },
+        { data: rawCompanies },
+        { data: rawDepartments },
+        { data: rawUsers },
+        { data: rawCandidates },
+        { data: rawJobOpenings },
+        { data: rawInterviews },
+        { data: rawFollowUps },
+        { data: rawOfferLetters },
+        { data: rawTargetSettings },
+        { data: rawTermsClauses },
       ] = await Promise.all([
         client.from('companies').select('*'),
         client.from('departments').select('*'),
@@ -409,19 +500,171 @@ async function startServer() {
         client.from('terms_clauses').select('*'),
       ]);
 
+      const candidateMap: Record<string, any> = {};
+      const formattedCandidates = (rawCandidates || []).map((row: any) => {
+        const cand = {
+          id: row.id,
+          fullName: row.full_name || row.fullName || '',
+          mobileNumber: row.mobile_number || row.mobileNumber || '',
+          whatsappNumber: row.whatsapp_number || row.whatsappNumber || row.mobile_number || '',
+          gender: row.gender,
+          age: row.age,
+          dateOfBirth: row.date_of_birth,
+          email: row.email,
+          city: row.city,
+          area: row.area,
+          address: row.address,
+          positionApplied: row.position_applied || row.positionApplied || '',
+          department: row.department || '',
+          companyId: row.company_id || row.companyId || 'comp-1',
+          companyName: row.company_name || row.companyName || 'Essential Soul Lifestyle Pvt Ltd',
+          qualification: row.qualification || 'Graduate',
+          totalExperience: row.total_experience || row.totalExperience || '1 Year',
+          relevantExperience: row.relevant_experience || row.relevantExperience || '1 Year',
+          currentCompany: row.current_company || row.currentCompany,
+          currentSalary: row.current_salary !== null && row.current_salary !== undefined ? Number(row.current_salary) : 0,
+          expectedSalary: row.expected_salary !== null && row.expected_salary !== undefined ? Number(row.expected_salary) : 0,
+          salaryOffered: row.salary_offered !== null && row.salary_offered !== undefined ? Number(row.salary_offered) : undefined,
+          noticePeriod: row.notice_period || 'Immediate',
+          preferredLocation: row.preferred_location || 'Delhi / NCR',
+          candidateSource: row.candidate_source || 'Indeed',
+          assignedHr: row.assigned_hr || 'Nandani',
+          remarks: row.remarks || '',
+          status: row.status || 'New Lead',
+          isActiveJoining: Boolean(row.is_active_joining),
+          activeJoinedDate: row.active_joining_date || undefined,
+          joiningDate: row.joining_date || undefined,
+          selectionDate: row.status === 'Selected' ? (row.joining_date || row.created_at?.split('T')[0] || '2026-09-06') : undefined,
+          actualJoinedDate: (row.is_active_joining || row.status === 'Joined') ? (row.joining_date || row.active_joining_date || '2026-09-06') : undefined,
+          reportingManager: row.company_name?.includes('BKD') ? 'Pooja Verma' : 'Nandani Sharma (HR Head)',
+          reportingTime: '09:30 AM',
+          officeLocation: row.company_name?.includes('BKD') ? 'B-12, Sector 63, Noida' : 'Plot A-40, Sector 62, Noida',
+          joiningStatus: (row.status === 'Joined' || row.is_active_joining) ? 'Joined' : (row.status === 'Selected' ? 'Confirmed' : undefined),
+          createdAt: row.created_at || new Date().toISOString(),
+          firstCallDate: row.first_call_date || undefined,
+          lastActivityDate: row.last_activity_date || row.created_at || new Date().toISOString(),
+          isArchived: false,
+        };
+        candidateMap[cand.id] = cand;
+        return cand;
+      });
+
+      const formattedFollowUps = (rawFollowUps || []).map((row: any) => {
+        const cand = candidateMap[row.candidate_id];
+        return {
+          id: row.id,
+          candidateId: row.candidate_id,
+          candidateName: cand?.fullName || row.candidate_name || 'Candidate',
+          candidateMobile: cand?.mobileNumber || row.candidate_phone || '',
+          position: cand?.positionApplied || row.position || '',
+          hrExecutive: row.conducted_by || cand?.assignedHr || 'Nandani',
+          followUpDate: row.scheduled_date || row.followUpDate || '',
+          followUpTime: row.scheduled_time || row.followUpTime || '11:00',
+          followUpMode: row.type || row.followUpMode || 'Call',
+          candidateResponse: row.notes || 'Discussed interview schedule',
+          notes: row.notes || '',
+          nextFollowUpDate: row.next_follow_up_date || undefined,
+          resultingStatus: row.outcome || cand?.status || 'Follow-up',
+          isCompleted: Boolean(row.completed),
+          createdAt: row.created_at || new Date().toISOString(),
+        };
+      });
+
+      const formattedInterviews = (rawInterviews || []).map((row: any) => {
+        const cand = candidateMap[row.candidate_id];
+        return {
+          id: row.id,
+          candidateId: row.candidate_id,
+          candidateName: row.candidate_name || cand?.fullName || 'Candidate',
+          candidateMobile: row.candidate_phone || cand?.mobileNumber || '',
+          position: row.candidate_role || cand?.positionApplied || 'Executive',
+          department: cand?.department || 'HR Recruitment',
+          hrExecutive: cand?.assignedHr || 'Nandani',
+          interviewer: row.interviewer_name || row.interviewer || 'Vikram Singh',
+          interviewDate: row.scheduled_date || row.interviewDate || '',
+          interviewTime: row.scheduled_time || row.interviewTime || '11:00',
+          interviewMode: row.round?.includes('Video') ? 'Video Interview' : (row.round?.includes('Calling') ? 'Phone Interview' : 'Office Interview'),
+          interviewLocation: row.round?.includes('Video') ? 'Google Meet' : 'ITHUM Tower, Noida Sector 62',
+          attendanceStatus: row.attendance_status || row.status || 'Scheduled',
+          reminderSent: true,
+          remarks: row.notes || '',
+          evaluation: row.evaluation || undefined,
+          createdAt: row.created_at || new Date().toISOString(),
+        };
+      });
+
+      const formattedUsers = (rawUsers || []).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        role: row.role,
+        department: row.department,
+        companyId: row.company_id || row.companyId || 'comp-1',
+        companyName: row.company_name || row.companyName || 'Essential Soul Lifestyle Pvt Ltd',
+        userId: row.user_id || row.userId || '',
+        password: row.password || '',
+        dailyInterviewTarget: row.daily_interview_target || 5,
+        monthlyActiveJoiningTarget: row.monthly_active_joining_target || 20,
+        status: row.status || 'Active',
+        avatarUrl: row.avatar_url,
+      }));
+
+      const formattedCompanies = (rawCompanies || []).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        code: row.code,
+        legalName: row.legal_name,
+        cin: row.cin,
+        gstin: row.gstin,
+        address: row.address,
+        city: row.city,
+        state: row.state,
+        pincode: row.pincode,
+        phone: row.phone,
+        email: row.email,
+        logoUrl: row.logo_url,
+        website: row.website,
+        departments: row.departments || [],
+        isActive: Boolean(row.is_active),
+        adminUserId: row.admin_user_id,
+        adminPassword: row.admin_password,
+        masterContactPerson: row.master_contact_person,
+        lastPasswordChanged: row.last_password_changed,
+        createdAt: row.created_at,
+      }));
+
+      const formattedJobOpenings = (rawJobOpenings || []).map((row: any) => ({
+        id: row.id,
+        title: row.title,
+        department: row.department,
+        companyId: row.company_id || row.companyId || 'comp-1',
+        positions: row.positions || 1,
+        experienceMin: row.experience_min || 0,
+        experienceMax: row.experience_max || 3,
+        salaryMin: row.salary_min || 15000,
+        salaryMax: row.salary_max || 25000,
+        location: row.location || 'Noida',
+        jobType: row.job_type || 'Full-time',
+        description: row.description || '',
+        requirements: row.requirements || '',
+        status: row.status || 'Open',
+        postedDate: row.posted_date || '2026-08-20',
+      }));
+
       return res.json({
         success: true,
         data: {
-          companies: companies || [],
-          departments: departments || [],
-          users: users || [],
-          candidates: candidates || [],
-          jobOpenings: jobOpenings || [],
-          interviews: interviews || [],
-          followUps: followUps || [],
-          offerLetters: offerLetters || [],
-          targetSettings: targetSettings || [],
-          termsClauses: termsClauses || [],
+          companies: formattedCompanies,
+          departments: rawDepartments || [],
+          users: formattedUsers,
+          candidates: formattedCandidates,
+          jobOpenings: formattedJobOpenings,
+          interviews: formattedInterviews,
+          followUps: formattedFollowUps,
+          offerLetters: rawOfferLetters || [],
+          targetSettings: rawTargetSettings || [],
+          termsClauses: rawTermsClauses || [],
         },
       });
     } catch (err: any) {

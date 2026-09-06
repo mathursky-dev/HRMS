@@ -152,6 +152,10 @@ interface RecruitmentContextType {
   dailyReports: DailyHrReport[];
   submitDailyReport: (report: Omit<DailyHrReport, 'id' | 'submittedAt'>) => void;
 
+  // Supabase Live Synchronization
+  isSupabaseSyncing: boolean;
+  refreshFromSupabase: () => Promise<{ success: boolean; message: string }>;
+
   // Reset to initial
   resetAllData: () => void;
 }
@@ -159,25 +163,25 @@ interface RecruitmentContextType {
 const RecruitmentContext = createContext<RecruitmentContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  CANDIDATES: 'esl_crm_candidates_v4',
-  FOLLOW_UPS: 'esl_crm_follow_ups_v4',
-  INTERVIEWS: 'esl_crm_interviews_v4',
-  JOB_OPENINGS: 'esl_crm_jobs_v4',
-  SETTINGS: 'esl_crm_settings_v4',
-  AD_SPENDS: 'esl_crm_ad_spends_v4',
-  AUDIT_LOGS: 'esl_crm_audit_logs_v4',
-  DAILY_REPORTS: 'esl_crm_daily_reports_v4',
-  CURRENT_USER: 'esl_crm_current_user_v4',
-  USERS: 'esl_crm_users_v4',
-  COMPANIES: 'esl_crm_companies_v4',
-  ACTIVE_COMPANY: 'esl_crm_active_company_v4',
-  DEPARTMENTS: 'esl_crm_departments_v4',
-  TARGETS: 'esl_crm_targets_v4',
-  THEME: 'esl_crm_theme_v4',
-  ROLE_PERMISSIONS: 'esl_crm_role_permissions_v4',
-  TERMS_CLAUSES: 'esl_crm_terms_clauses_v4',
-  OFFER_LETTERS: 'esl_crm_offer_letters_v4',
-  IS_AUTHENTICATED: 'esl_crm_auth_status_v4',
+  CANDIDATES: 'esl_crm_candidates_v5',
+  FOLLOW_UPS: 'esl_crm_follow_ups_v5',
+  INTERVIEWS: 'esl_crm_interviews_v5',
+  JOB_OPENINGS: 'esl_crm_jobs_v5',
+  SETTINGS: 'esl_crm_settings_v5',
+  AD_SPENDS: 'esl_crm_ad_spends_v5',
+  AUDIT_LOGS: 'esl_crm_audit_logs_v5',
+  DAILY_REPORTS: 'esl_crm_daily_reports_v5',
+  CURRENT_USER: 'esl_crm_current_user_v5',
+  USERS: 'esl_crm_users_v5',
+  COMPANIES: 'esl_crm_companies_v5',
+  ACTIVE_COMPANY: 'esl_crm_active_company_v5',
+  DEPARTMENTS: 'esl_crm_departments_v5',
+  TARGETS: 'esl_crm_targets_v5',
+  THEME: 'esl_crm_theme_v5',
+  ROLE_PERMISSIONS: 'esl_crm_role_permissions_v5',
+  TERMS_CLAUSES: 'esl_crm_terms_clauses_v5',
+  OFFER_LETTERS: 'esl_crm_offer_letters_v5',
+  IS_AUTHENTICATED: 'esl_crm_auth_status_v5',
 };
 
 export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -185,11 +189,11 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   useEffect(() => {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        ['esl_crm_candidates_v1', 'esl_crm_candidates_v2', 'esl_crm_candidates_v3',
-         'esl_crm_follow_ups_v1', 'esl_crm_follow_ups_v2', 'esl_crm_follow_ups_v3',
-         'esl_crm_interviews_v1', 'esl_crm_interviews_v2', 'esl_crm_interviews_v3',
-         'esl_crm_offer_letters_v1', 'esl_crm_offer_letters_v2', 'esl_crm_offer_letters_v3',
-         'esl_crm_audit_logs_v1', 'esl_crm_audit_logs_v2', 'esl_crm_audit_logs_v3'].forEach(k => {
+        ['esl_crm_candidates_v1', 'esl_crm_candidates_v2', 'esl_crm_candidates_v3', 'esl_crm_candidates_v4',
+         'esl_crm_follow_ups_v1', 'esl_crm_follow_ups_v2', 'esl_crm_follow_ups_v3', 'esl_crm_follow_ups_v4',
+         'esl_crm_interviews_v1', 'esl_crm_interviews_v2', 'esl_crm_interviews_v3', 'esl_crm_interviews_v4',
+         'esl_crm_offer_letters_v1', 'esl_crm_offer_letters_v2', 'esl_crm_offer_letters_v3', 'esl_crm_offer_letters_v4',
+         'esl_crm_audit_logs_v1', 'esl_crm_audit_logs_v2', 'esl_crm_audit_logs_v3', 'esl_crm_audit_logs_v4'].forEach(k => {
           localStorage.removeItem(k);
         });
       }
@@ -231,16 +235,21 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (saved) {
       try { 
         const parsed: UserProfile[] = JSON.parse(saved);
-        return parsed.map(u => {
-          const matchInitial = INITIAL_USERS.find(iu => iu.id === u.id || iu.email === u.email);
-          const defaultUserId = matchInitial?.userId || u.email.split('@')[0] || u.name.toLowerCase().replace(/\s+/g, '.');
-          const defaultPassword = matchInitial?.password || `${u.name.split(' ')[0]}@2026`;
-          return {
-            ...u,
-            userId: u.userId || defaultUserId,
-            password: u.password || defaultPassword,
-          };
-        });
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const existingIds = new Set(parsed.map(u => u.id));
+          const missing = INITIAL_USERS.filter(iu => !existingIds.has(iu.id));
+          const combined = [...parsed, ...missing];
+          return combined.map(u => {
+            const matchInitial = INITIAL_USERS.find(iu => iu.id === u.id || iu.email === u.email);
+            const defaultUserId = matchInitial?.userId || u.email.split('@')[0] || u.name.toLowerCase().replace(/\s+/g, '.');
+            const defaultPassword = matchInitial?.password || `${u.name.split(' ')[0]}@2026`;
+            return {
+              ...u,
+              userId: u.userId || defaultUserId,
+              password: u.password || defaultPassword,
+            };
+          });
+        }
       } catch (e) { /* ignore */ }
     }
     return INITIAL_USERS;
@@ -632,7 +641,14 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [candidates, setCandidates] = useState<Candidate[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.CANDIDATES);
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try { 
+        const parsed: Candidate[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const existingIds = new Set(parsed.map(c => c.id));
+          const missing = INITIAL_CANDIDATES.filter(ic => !existingIds.has(ic.id));
+          return [...parsed, ...missing];
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_CANDIDATES;
   });
@@ -645,7 +661,14 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [followUps, setFollowUps] = useState<FollowUpRecord[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.FOLLOW_UPS);
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try { 
+        const parsed: FollowUpRecord[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const existingIds = new Set(parsed.map(f => f.id));
+          const missing = INITIAL_FOLLOW_UPS.filter(ifu => !existingIds.has(ifu.id));
+          return [...parsed, ...missing];
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_FOLLOW_UPS;
   });
@@ -658,7 +681,14 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [interviews, setInterviews] = useState<InterviewRecord[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.INTERVIEWS);
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try { 
+        const parsed: InterviewRecord[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const existingIds = new Set(parsed.map(i => i.id));
+          const missing = INITIAL_INTERVIEWS.filter(ii => !existingIds.has(ii.id));
+          return [...parsed, ...missing];
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_INTERVIEWS;
   });
@@ -1227,7 +1257,14 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [offerLetters, setOfferLetters] = useState<OfferLetter[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.OFFER_LETTERS);
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try { 
+        const parsed: OfferLetter[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const existingIds = new Set(parsed.map(o => o.id));
+          const missing = INITIAL_OFFER_LETTERS.filter(io => !existingIds.has(io.id));
+          return [...parsed, ...missing];
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_OFFER_LETTERS;
   });
@@ -1291,6 +1328,51 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return o;
     }));
   };
+
+  // Supabase live synchronization
+  const [isSupabaseSyncing, setIsSupabaseSyncing] = useState(false);
+
+  const refreshFromSupabase = async (): Promise<{ success: boolean; message: string }> => {
+    setIsSupabaseSyncing(true);
+    try {
+      const res = await fetch('/api/supabase/data');
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+      const json = await res.json();
+      if (json.success && json.data) {
+        if (Array.isArray(json.data.candidates) && json.data.candidates.length > 0) {
+          setCandidates(json.data.candidates);
+        }
+        if (Array.isArray(json.data.followUps) && json.data.followUps.length > 0) {
+          setFollowUps(json.data.followUps);
+        }
+        if (Array.isArray(json.data.interviews) && json.data.interviews.length > 0) {
+          setInterviews(json.data.interviews);
+        }
+        if (Array.isArray(json.data.companies) && json.data.companies.length > 0) {
+          setCompanies(json.data.companies);
+        }
+        if (Array.isArray(json.data.jobOpenings) && json.data.jobOpenings.length > 0) {
+          setJobOpenings(json.data.jobOpenings);
+        }
+        return {
+          success: true,
+          message: `Loaded ${json.data.candidates?.length || 0} candidates from Supabase!`,
+        };
+      }
+      return { success: false, message: json.error || 'No data returned from Supabase' };
+    } catch (err: any) {
+      console.warn('Supabase sync warning:', err);
+      return { success: false, message: err.message || 'Error communicating with Supabase' };
+    } finally {
+      setIsSupabaseSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshFromSupabase();
+  }, []);
 
   // Reset demo
   const resetAllData = () => {
@@ -1403,6 +1485,8 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         auditLogs,
         dailyReports,
         submitDailyReport,
+        isSupabaseSyncing,
+        refreshFromSupabase,
         resetAllData,
         theme,
         toggleTheme,

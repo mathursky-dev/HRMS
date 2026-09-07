@@ -8,10 +8,7 @@ const PORT = 3000;
 const CONFIG_FILE = path.join(process.cwd(), '.supabase-config.json');
 
 const DEFAULT_SUPABASE_URL = 'https://snvgarluywefmlsimikf.supabase.co';
-const DEFAULT_SUPABASE_SERVICE_ROLE_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODU5NTM4NywiZXhwIjoyMTA0MTcxMzg3fQ.o9rTQB_rbBYfWAxRf3h1cDA7vKBpCBEXMjAhFrH8U1Y';
-const DEFAULT_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTUzODcsImV4cCI6MjEwNDE3MTM4N30.yXUxN8bSlNciLCHW_yAS5ioOFoZpkqi4nS2D5wl4cVo';
+const DEFAULT_SUPABASE_KEY = 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m';
 
 function normalizeUrl(input: string): string {
   if (!input) return '';
@@ -40,40 +37,24 @@ function normalizeUrl(input: string): string {
   return cleaned.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 }
 
-function extractJwtProjectRef(token: string): string | null {
-  if (!token) return null;
-  try {
-    const parts = token.trim().split('.');
-    if (parts.length >= 2) {
-      let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-      while (base64.length % 4) {
-        base64 += '=';
-      }
-      const jsonStr = Buffer.from(base64, 'base64').toString('utf8');
-      const payload = JSON.parse(jsonStr);
-      return payload.ref || null;
-    }
-  } catch {}
-  return null;
-}
-
 function normalizeKey(input: string): string {
   if (!input) return '';
   let str = input.trim();
   str = str.replace(/^["']|["']$/g, '').trim();
   str = str.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
 
-  // If multiple tokens are pasted together, pick the JWT anon or secret token
+  // If multiple tokens are pasted together, pick the secret or service_role/anon token
   if (str.includes(' ') || str.includes('\n')) {
     const tokens = str.split(/\s+/);
+    const foundSecret = tokens.find(t => t.includes('sb_secret_'));
+    if (foundSecret) {
+      return foundSecret.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
+    }
     const foundJwt = tokens.find(t => t.includes('eyJ'));
     if (foundJwt) {
       return foundJwt.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
     }
     return tokens[0].trim();
-  }
-  if (str.startsWith('sb_secret_') || str.includes('sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m')) {
-    return '';
   }
   return str;
 }
@@ -109,47 +90,6 @@ function loadSavedConfig(): { url: string; key: string } {
   return { url: '', key: '' };
 }
 
-function resolveSupabaseKey(savedKey: string, url: string): string {
-  const projId = extractProjectId(url);
-  const cleanedSaved = normalizeKey(savedKey);
-
-  // 1. Saved key from config if valid and matches project
-  if (cleanedSaved && cleanedSaved.startsWith('eyJ')) {
-    const ref = extractJwtProjectRef(cleanedSaved);
-    if (!ref || ref === projId) {
-      return cleanedSaved;
-    }
-  }
-
-  // 2. Service role key from env
-  const envSr = normalizeKey(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
-  if (envSr && envSr.startsWith('eyJ')) {
-    const ref = extractJwtProjectRef(envSr);
-    if (!ref || ref === projId) return envSr;
-  }
-
-  // 3. Anon key from env
-  const envAnon = normalizeKey(process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '');
-  if (envAnon && envAnon.startsWith('eyJ')) {
-    const ref = extractJwtProjectRef(envAnon);
-    if (!ref || ref === projId) return envAnon;
-  }
-
-  // 4. SUPABASE_SECRET_KEY only if valid JWT
-  const envSecret = normalizeKey(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_KEY || '');
-  if (envSecret && envSecret.startsWith('eyJ')) {
-    const ref = extractJwtProjectRef(envSecret);
-    if (!ref || ref === projId) return envSecret;
-  }
-
-  // 5. Default verified keys if default project
-  if (projId === 'snvgarluywefmlsimikf') {
-    return DEFAULT_SUPABASE_SERVICE_ROLE_KEY;
-  }
-
-  return cleanedSaved || envSr || envAnon || '';
-}
-
 const saved = loadSavedConfig();
 let currentSupabaseUrl = normalizeUrl(
   saved.url ||
@@ -157,7 +97,13 @@ let currentSupabaseUrl = normalizeUrl(
   process.env.VITE_SUPABASE_URL ||
   DEFAULT_SUPABASE_URL
 );
-let currentSupabaseKey = resolveSupabaseKey(saved.key, currentSupabaseUrl);
+let currentSupabaseKey = normalizeKey(
+  saved.key ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_KEY ||
+  DEFAULT_SUPABASE_KEY
+);
 
 let currentProjectId = extractProjectId(currentSupabaseUrl);
 
@@ -224,31 +170,23 @@ async function testSupabaseConnection(client: SupabaseClient, url: string) {
         error.message?.toLowerCase().includes('not find the table') ||
         error.message?.toLowerCase().includes('does not exist');
 
-      const errMsgLower = (error.message || '').toLowerCase();
       const isUnauthorized =
         error.code === '401' ||
-        error.code === '403' ||
         error.code === 'PGRST301' ||
-        errMsgLower.includes('unauthorized') ||
-        errMsgLower.includes('jwt') ||
-        errMsgLower.includes('apikey') ||
-        errMsgLower.includes('api key') ||
-        errMsgLower.includes('unregistered');
-
-      const isUnregistered = errMsgLower.includes('unregistered');
+        error.message?.toLowerCase().includes('unauthorized') ||
+        error.message?.toLowerCase().includes('jwt') ||
+        error.message?.toLowerCase().includes('apikey');
 
       return {
         isConnected: !isUnauthorized,
         hasTablesCreated: !isTableMissing && !isUnauthorized,
         latencyMs,
-        error: isUnregistered
-          ? `Unregistered API key: The provided Supabase API key is not registered for this project. Please check your Project URL and anon/service key in Supabase Dashboard > Settings > API.`
-          : isUnauthorized
+        error: isUnauthorized
           ? 'Authentication failed: Invalid Supabase API Key or insufficient permissions.'
           : isTableMissing
           ? 'Connected to Supabase! PostgreSQL database tables have not been created yet. Run the SQL schema script in Supabase SQL Editor.'
           : error.message,
-        errorCode: isUnregistered ? 'UNREGISTERED_API_KEY' : error.code,
+        errorCode: error.code,
       };
     }
 
@@ -332,8 +270,8 @@ async function startServer() {
       currentSupabaseUrl = normalizeUrl(url);
       currentProjectId = extractProjectId(currentSupabaseUrl);
     }
-    if (key !== undefined) {
-      currentSupabaseKey = resolveSupabaseKey(key, currentSupabaseUrl);
+    if (key) {
+      currentSupabaseKey = normalizeKey(key);
     }
 
     // Persist to local config file

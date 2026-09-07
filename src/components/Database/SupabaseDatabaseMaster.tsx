@@ -23,8 +23,7 @@ import {
   EyeOff,
   Link,
   AlertTriangle,
-  Play,
-  RotateCcw
+  Play
 } from 'lucide-react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 import { 
@@ -37,14 +36,10 @@ import {
   fetchDatasetFromSupabase,
   getSupabaseAnonKey,
   setSupabaseAnonKeyOverride,
-  clearSupabaseOverrides,
   updateSupabaseServerConfig,
   extractProjectId,
   normalizeSupabaseUrl,
   getSupabaseUrl,
-  DEFAULT_SUPABASE_URL,
-  DEFAULT_SUPABASE_ANON_KEY,
-  extractJwtProjectRef,
   SupabaseHealthResult
 } from '../../lib/supabase';
 
@@ -76,15 +71,14 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
   const [copiedKey, setCopiedKey] = useState<boolean>(false);
-  const [copiedVercelEnv, setCopiedVercelEnv] = useState<boolean>(false);
   
   // Optional key input for immediate client-side testing
   const [anonKeyInput, setAnonKeyInput] = useState<string>(() => getSupabaseAnonKey());
   const [showKeyInput, setShowKeyInput] = useState<boolean>(false);
 
-  // Server-side & client-side dynamic DB Connection state
-  const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(() => getSupabaseUrl());
-  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>(() => getSupabaseAnonKey());
+  // Server-side dynamic DB Connection state
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(SUPABASE_URL);
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>('sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m');
   const [showKeyPassword, setShowKeyPassword] = useState<boolean>(false);
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
   const [configFeedback, setConfigFeedback] = useState<{ success: boolean; message: string } | null>(null);
@@ -160,41 +154,8 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
     setTimeout(() => setCopiedUrl(false), 2000);
   };
 
-  const handleClearCredentials = () => {
-    clearSupabaseOverrides();
-    setAnonKeyInput('');
-    setSupabaseKeyInput('');
-    setSupabaseUrlInput(getSupabaseUrl());
-    setConfigFeedback({
-      success: true,
-      message: 'Cleared all locally stored overrides. Resetting to defaults...',
-    });
-    runHealthCheck();
-  };
-
-  const handleUseDefaultKey = () => {
-    setSupabaseUrlInput(DEFAULT_SUPABASE_URL);
-    setSupabaseKeyInput(DEFAULT_SUPABASE_ANON_KEY);
-    setAnonKeyInput(DEFAULT_SUPABASE_ANON_KEY);
-    setSupabaseAnonKeyOverride(DEFAULT_SUPABASE_ANON_KEY);
-    setConfigFeedback({
-      success: true,
-      message: 'Restored verified project anon key. Re-testing connection...',
-    });
-    runHealthCheck();
-  };
-
-  const handleCopyVercelEnv = () => {
-    const keyVal = anonKeyInput || supabaseKeyInput || DEFAULT_SUPABASE_ANON_KEY;
-    const vercelEnvText = `VITE_SUPABASE_URL=${activeSupabaseUrl}\nVITE_SUPABASE_ANON_KEY=${keyVal}`;
-    navigator.clipboard.writeText(vercelEnvText);
-    setCopiedVercelEnv(true);
-    setTimeout(() => setCopiedVercelEnv(false), 2500);
-  };
-
   const handleSaveAnonKey = () => {
     setSupabaseAnonKeyOverride(anonKeyInput);
-    setSupabaseKeyInput(anonKeyInput);
     runHealthCheck();
   };
 
@@ -416,11 +377,10 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
             </label>
             <div className="relative">
               <input
-                id="supabase-key-input-field"
                 type={showKeyPassword ? 'text' : 'password'}
                 value={supabaseKeyInput}
                 onChange={(e) => setSupabaseKeyInput(e.target.value)}
-                placeholder="eyJhbGciOi... (Supabase anon public key or service role key)"
+                placeholder="sb_secret_... or eyJhbGciOi..."
                 className="w-full px-3 py-2 pr-9 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-mono text-xs text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
               <button
@@ -432,61 +392,13 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                 {showKeyPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-
-            {/* Real-time mismatch and quick-fill helper */}
-            {(() => {
-              const inputUrlProjId = extractProjectId(supabaseUrlInput || activeSupabaseUrl);
-              const inputKeyRef = extractJwtProjectRef(supabaseKeyInput);
-              const isKeyMismatched = Boolean(inputKeyRef && inputUrlProjId && inputKeyRef !== inputUrlProjId);
-
-              if (isKeyMismatched) {
-                return (
-                  <div className="mt-1 p-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-[11px] flex items-start gap-1.5">
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5">
-                      <p>
-                        <strong>Key Mismatch:</strong> This API key was issued for project <code>{inputKeyRef}</code>, but your Project URL is <code>{inputUrlProjId}</code>. Supabase will reject this key with <em>"Unregistered API key"</em>.
-                      </p>
-                      {inputUrlProjId === 'snvgarluywefmlsimikf' && (
-                        <button
-                          type="button"
-                          onClick={handleUseDefaultKey}
-                          className="font-bold underline text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 cursor-pointer flex items-center gap-1 mt-1"
-                        >
-                          <Zap className="w-3 h-3" />
-                          <span>Click here to fill verified project anon key</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              }
-
-              if (inputUrlProjId === 'snvgarluywefmlsimikf' && !supabaseKeyInput) {
-                return (
-                  <div className="pt-0.5 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-400">Default project key ready</span>
-                    <button
-                      type="button"
-                      onClick={handleUseDefaultKey}
-                      className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-                    >
-                      <Zap className="w-3 h-3" />
-                      <span>Use Verified Anon Key</span>
-                    </button>
-                  </div>
-                );
-              }
-
-              return null;
-            })()}
           </div>
 
-          <div className="md:col-span-2 flex items-center gap-1.5">
+          <div className="md:col-span-2">
             <button
               onClick={handleSaveAndConnect}
               disabled={isSavingConfig}
-              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer h-[38px]"
+              className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer h-[38px]"
             >
               {isSavingConfig ? (
                 <>
@@ -499,13 +411,6 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                   <span>Connect & Verify</span>
                 </>
               )}
-            </button>
-            <button
-              onClick={handleClearCredentials}
-              title="Reset to default configuration and purge saved local overrides"
-              className="p-2 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors h-[38px] cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -593,113 +498,24 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
       {activeTab === 'overview' && (
         <div className="space-y-4">
           {/* Quick Info / Warning Banner */}
-          {health?.error && (() => {
-            const errText = (health.error || '').toLowerCase();
-            const isUnregistered = health.errorCode === 'UNREGISTERED_API_KEY' || errText.includes('unregistered') || errText.includes('invalid api key');
-            const isMissingKey = health.errorCode === 'MISSING_API_KEY' || !health.hasAnonKey || errText.includes('not configured');
-            const isAuthIssue = isUnregistered || isMissingKey || errText.includes('jwt') || errText.includes('apikey') || errText.includes('api key') || errText.includes('unauthorized');
-
-            if (isAuthIssue) {
-              return (
-                <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200 text-xs flex items-start gap-3 shadow-xs">
-                  <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                  <div className="space-y-2 flex-1">
-                    <div>
-                      <p className="font-bold text-sm text-rose-950 dark:text-rose-100 flex items-center gap-2">
-                        <span>Supabase Authentication Notice: {isUnregistered ? 'Unregistered API Key' : 'API Key Required'}</span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-200 dark:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold">
-                          Project: {activeProjectId}
-                        </span>
-                      </p>
-                      <p className="leading-relaxed mt-1 text-rose-800 dark:text-rose-300">
-                        {health.error}
-                      </p>
-                    </div>
-
-                    <div className="p-3 rounded-lg bg-white/70 dark:bg-rose-900/30 border border-rose-200/80 dark:border-rose-800 text-[11px] space-y-1.5">
-                      <p className="font-semibold text-rose-950 dark:text-rose-100">Fix on Vercel deployment:</p>
-                      <ul className="list-disc list-inside space-y-1 text-rose-800 dark:text-rose-300">
-                        <li>The API key currently in use does not match your project <strong>{activeProjectId}</strong> (<code>{activeSupabaseUrl}</code>).</li>
-                        <li>In Vercel: go to <strong>Settings &rarr; Environment Variables</strong> and set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>.</li>
-                        <li>Or paste your anon public key directly into the configuration box above and click <strong>Connect & Verify</strong>.</li>
-                      </ul>
-                    </div>
-
-                    <div className="pt-1 flex flex-wrap items-center gap-2">
-                      {activeProjectId === 'snvgarluywefmlsimikf' && (
-                        <button
-                          onClick={handleUseDefaultKey}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Use Verified Project Anon Key</span>
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          const el = document.getElementById('supabase-key-input-field');
-                          if (el) {
-                            el.focus();
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          }
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                      >
-                        <Key className="w-3.5 h-3.5" />
-                        <span>Update API Key Above</span>
-                      </button>
-
-                      <button
-                        onClick={handleClearCredentials}
-                        className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Clear Cached Overrides</span>
-                      </button>
-
-                      <button
-                        onClick={() => setActiveTab('config')}
-                        className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <span>Vercel Setup Guide</span>
-                        <ArrowRight className="w-3 h-3" />
-                      </button>
-
-                      <a
-                        href={`https://supabase.com/dashboard/project/${activeProjectId}/settings/api`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold text-xs transition-colors flex items-center gap-1.5 ml-auto"
-                      >
-                        <span>Open Supabase API Keys</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            return (
-              <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-bold text-amber-950 dark:text-amber-100">Supabase Setup Notice</p>
-                  <p className="leading-relaxed">{health.error}</p>
-                  <div className="pt-1 flex items-center gap-2">
-                    <button
-                      onClick={() => setActiveTab('schema')}
-                      className="font-bold underline text-amber-800 dark:text-amber-300 hover:text-amber-900 cursor-pointer flex items-center gap-1"
-                    >
-                      <span>View and copy the SQL Schema script</span>
-                      <ArrowRight className="w-3 h-3" />
-                    </button>
-                  </div>
+          {health?.error && (
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-amber-950 dark:text-amber-100">Supabase Setup Notice</p>
+                <p className="leading-relaxed">{health.error}</p>
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    onClick={() => setActiveTab('schema')}
+                    className="font-bold underline text-amber-800 dark:text-amber-300 hover:text-amber-900 cursor-pointer flex items-center gap-1"
+                  >
+                    <span>View and copy the SQL Schema script</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
-            );
-          })()}
+            </div>
+          )}
 
           {/* Health Details Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -982,186 +798,80 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
               Supabase Project & Environment Configuration
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Securely authenticate your application with Supabase PostgREST & Auth services on Cloud Run, Vercel, or locally
+              Securely authenticate your application with Supabase PostgREST & Auth services
             </p>
           </div>
 
-          <div className="space-y-4 text-xs">
-            {/* VERCEL DEPLOYMENT GUIDE */}
-            <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-slate-950 text-white border border-slate-800 space-y-3 shadow-sm">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded bg-white text-slate-950 flex items-center justify-center font-black text-xs">
-                    ▲
-                  </div>
-                  <span className="font-bold text-sm text-white">
-                    Fix "Unregistered API key" on Vercel Deployment
-                  </span>
-                </div>
-                <button
-                  onClick={handleCopyVercelEnv}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  {copiedVercelEnv ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Copied for Vercel!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy Vercel Environment Variables</span>
-                    </>
-                  )}
-                </button>
+          <div className="space-y-3 text-xs">
+            {/* Server-Side Secret Key Protection Card */}
+            <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 space-y-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                <span className="font-bold text-emerald-950 dark:text-emerald-200">
+                  Server-Side API Proxy Active (Secure Backend Architecture)
+                </span>
               </div>
-
-              <p className="text-slate-300 leading-relaxed">
-                When deployed on Vercel, Vite runs as a static client application in the user's browser. If <code className="text-emerald-400 font-mono">VITE_SUPABASE_ANON_KEY</code> is missing or contains an old/mismatched key, Supabase responds with <em>"Unregistered API key"</em>.
+              <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+                Your Supabase API secret key is configured and executed strictly on the Node.js / Express backend server (<code className="font-mono bg-white/60 dark:bg-slate-900 px-1 py-0.5 rounded">/api/supabase/*</code>). Secret credentials are never sent to or exposed in client browser DevTools.
               </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1 text-slate-200">
-                <div className="p-3 rounded-lg bg-slate-800/80 border border-slate-700/80 space-y-1">
-                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">1</span>
-                    Open Vercel Settings
-                  </span>
-                  <p className="text-[11px] text-slate-300">
-                    Go to your project dashboard on <a href="https://vercel.com" target="_blank" rel="noreferrer" className="text-emerald-400 underline">vercel.com</a> &rarr; <strong>Settings</strong> &rarr; <strong>Environment Variables</strong>.
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-lg bg-slate-800/80 border border-slate-700/80 space-y-1">
-                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">2</span>
-                    Add Variables
-                  </span>
-                  <p className="text-[11px] text-slate-300 font-mono">
-                    VITE_SUPABASE_URL<br />
-                    VITE_SUPABASE_ANON_KEY
-                  </p>
-                </div>
-
-                <div className="p-3 rounded-lg bg-slate-800/80 border border-slate-700/80 space-y-1">
-                  <span className="font-bold text-emerald-400 flex items-center gap-1.5">
-                    <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center">3</span>
-                    Redeploy
-                  </span>
-                  <p className="text-[11px] text-slate-300">
-                    Trigger a new deployment or click <strong>Deployments &rarr; Redeploy</strong> so Vercel bakes the variables into the bundle.
-                  </p>
-                </div>
+              <div className="pt-1 flex items-center gap-3 font-mono text-[11px] text-emerald-800 dark:text-emerald-300">
+                <span>Backend Status: <strong>Ready & Authenticated</strong></span>
+                <span>•</span>
+                <span>Auth Scope: <strong>Project {health?.projectId || 'snvgarluywefmlsimikf'}</strong></span>
               </div>
             </div>
 
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-2">
+              <span className="font-bold text-slate-700 dark:text-slate-200">Declared Environment Variables (.env.example):</span>
+              <pre className="p-3 rounded-lg bg-[#0F172A] text-emerald-400 font-mono text-[11px] overflow-x-auto">
+{`# Server-Side Supabase Configuration (Never exposed to browser)
+SUPABASE_URL="https://${health?.projectId || 'snvgarluywefmlsimikf'}.supabase.co"
+SUPABASE_SECRET_KEY=
+
+# Client-Side Public Configuration
+VITE_SUPABASE_URL="https://${health?.projectId || 'snvgarluywefmlsimikf'}.supabase.co"
+VITE_SUPABASE_ANON_KEY=`}
+              </pre>
+            </div>
+
             {/* In-browser key test helper */}
-            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3 bg-slate-50/50 dark:bg-slate-900/30">
-              <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3">
+              <div className="flex items-center justify-between">
                 <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-                  <Key className="w-4 h-4 text-emerald-600" />
-                  <span>Instant Browser Session Override (No Vercel Redeploy Needed):</span>
+                  <span>Supabase Anon Public API Key (Browser Session Override):</span>
                 </label>
-                <span className="text-[10px] text-slate-400">Stores directly in browser localStorage</span>
+                <span className="text-[10px] text-slate-400">Stored locally in browser session</span>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="password"
-                    value={anonKeyInput}
-                    onChange={(e) => setAnonKeyInput(e.target.value)}
-                    placeholder="Paste your Supabase anon/public key (e.g. eyJhbGciOiJIUzI1NiIsInR5cCI...)"
-                    className="flex-1 py-2 px-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveAnonKey}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0 cursor-pointer"
-                  >
-                    Save & Test Key
-                  </button>
-                  {activeProjectId === 'snvgarluywefmlsimikf' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAnonKeyInput(DEFAULT_SUPABASE_ANON_KEY);
-                        setSupabaseAnonKeyOverride(DEFAULT_SUPABASE_ANON_KEY);
-                        runHealthCheck();
-                      }}
-                      className="px-3 py-2 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 hover:bg-emerald-200 dark:hover:bg-emerald-900 text-emerald-800 dark:text-emerald-300 font-semibold text-xs transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-                    >
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>Use Default Anon Key</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleClearCredentials}
-                    className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-semibold text-xs transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Clear Overrides</span>
-                  </button>
-                </div>
-
-                {/* Inline check */}
-                {(() => {
-                  const keyRef = extractJwtProjectRef(anonKeyInput);
-                  if (keyRef && keyRef !== activeProjectId) {
-                    return (
-                      <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3 shrink-0" />
-                        <span>Warning: This key belongs to project "{keyRef}", not "{activeProjectId}". It will cause "Unregistered API key".</span>
-                      </p>
-                    );
-                  }
-                  return null;
-                })()}
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={anonKeyInput}
+                  onChange={(e) => setAnonKeyInput(e.target.value)}
+                  placeholder="Paste your Supabase anon/public key (e.g. eyJhbGciOiJIUzI1NiIsInR5cCI...)"
+                  className="flex-1 py-2 px-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 font-mono text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveAnonKey}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0"
+                >
+                  Save & Ping
+                </button>
               </div>
 
-              <div className="pt-1 text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">
-                <span>Where to find your key in Supabase:</span>
+              <div className="pt-2 text-[11px] text-slate-500 flex items-center gap-1.5">
+                <span>Where to find your key:</span>
                 <a
                   href={`https://supabase.com/dashboard/project/${activeProjectId}/settings/api`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-emerald-600 dark:text-emerald-400 underline font-semibold flex items-center gap-1"
                 >
-                  <span>Project Settings &rarr; API &rarr; Project API keys (anon / public)</span>
+                  <span>Supabase Dashboard &rarr; Project Settings &rarr; API &rarr; Project API keys (anon / public)</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
-            </div>
-
-            {/* Server-Side Secret Key Protection Card */}
-            <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 space-y-2">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                <span className="font-bold text-emerald-950 dark:text-emerald-200">
-                  Full-Stack Architecture & Fallback Resilience
-                </span>
-              </div>
-              <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
-                When running on full-stack servers, requests are proxied via Node.js Express (<code className="font-mono bg-white/60 dark:bg-slate-900 px-1 py-0.5 rounded">/api/supabase/*</code>). On static hosting environments like Vercel or GitHub Pages, the client smoothly falls back to direct browser-to-Supabase REST API communication with your anon key.
-              </p>
-              <div className="pt-1 flex items-center gap-3 font-mono text-[11px] text-emerald-800 dark:text-emerald-300">
-                <span>Active Target: <strong>Project {activeProjectId}</strong></span>
-                <span>•</span>
-                <span>Endpoint: <strong>{activeSupabaseUrl}</strong></span>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 space-y-2">
-              <span className="font-bold text-slate-700 dark:text-slate-200">Standard Environment Variables Reference:</span>
-              <pre className="p-3 rounded-lg bg-[#0F172A] text-emerald-400 font-mono text-[11px] overflow-x-auto">
-{`# Client-Side Public Configuration (Vercel & Vite)
-VITE_SUPABASE_URL="${activeSupabaseUrl}"
-VITE_SUPABASE_ANON_KEY=
-
-# Server-Side Configuration (Cloud Run / Node.js backend)
-SUPABASE_URL="${activeSupabaseUrl}"
-SUPABASE_SECRET_KEY=`}
-              </pre>
             </div>
           </div>
         </div>

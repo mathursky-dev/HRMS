@@ -58,7 +58,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   
   const totalAlertsCount = overdueFollowUps.length + (untouchedLeads.length > 0 ? 1 : 0) + interviewsToday.length;
 
+  const isSuperAdmin = currentUser.role === 'Super Admin' || currentUser.userId === 'admin';
   const activeCompany = companies.find(c => c.id === activeCompanyId);
+  const availableSwitchUsers = isSuperAdmin
+    ? allUsers
+    : allUsers.filter(u => u.companyId === currentUser.companyId && u.role !== 'Super Admin');
 
   return (
     <header className="sticky top-0 z-30 bg-[#0F172A] border-b border-slate-700 text-white">
@@ -80,66 +84,91 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             </div>
 
-            {/* Active Company Entity Switcher Pill */}
+            {/* Active Company Entity Switcher / Locked Pill */}
             <div className="relative hidden md:block ml-2 pl-3 border-l border-slate-700">
-              <button
-                id="btn-nav-company-switcher"
-                onClick={() => setShowCompanyDropdown(!showCompanyDropdown)}
-                className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-lg text-xs transition-colors cursor-pointer"
-              >
-                <Building2 className="w-3.5 h-3.5 text-blue-400" />
-                <span className="font-bold text-slate-200 truncate max-w-[140px]">
-                  {activeCompany ? activeCompany.code : 'All Companies'}
-                </span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </button>
-
-              {showCompanyDropdown && (
-                <div className="absolute left-0 mt-2 w-64 bg-slate-900 rounded-xl shadow-2xl border border-slate-700 py-1.5 z-50 text-slate-200">
-                  <div className="px-3 py-1.5 border-b border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>Active Working Entity</span>
-                    <button 
-                      onClick={() => { setShowCompanyDropdown(false); navigate('companies'); }}
-                      className="text-blue-400 hover:underline cursor-pointer"
-                    >
-                      Master →
-                    </button>
-                  </div>
-
+              {isSuperAdmin ? (
+                <>
                   <button
-                    onClick={() => {
-                      setActiveCompanyId('ALL');
-                      setShowCompanyDropdown(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-800 transition-colors cursor-pointer ${
-                      activeCompanyId === 'ALL' ? 'bg-blue-950/60 text-blue-400 font-bold' : ''
-                    }`}
+                    id="btn-nav-company-switcher"
+                    onClick={() => setShowCompanyDropdown(!showCompanyDropdown)}
+                    className="flex items-center space-x-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-lg text-xs transition-colors cursor-pointer"
+                    title="Super Admin: Switch between All Entities (Consolidated) or filter by company"
                   >
-                    <div>
-                      <div className="font-semibold text-slate-200">All Entities (Consolidated)</div>
-                      <div className="text-[10px] text-slate-400">Total Group View</div>
-                    </div>
-                    {activeCompanyId === 'ALL' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
+                    <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="font-bold text-slate-200 truncate max-w-[150px]">
+                      {activeCompanyId === 'ALL' ? 'All Entities (Consolidated)' : (activeCompany ? activeCompany.code : 'All Companies')}
+                    </span>
+                    <span className="text-[9px] bg-indigo-950 text-indigo-300 border border-indigo-700/50 px-1.5 py-0.2 rounded font-bold">
+                      Super Admin
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-slate-400" />
                   </button>
 
-                  {companies.map(comp => (
-                    <button
-                      key={comp.id}
-                      onClick={() => {
-                        setActiveCompanyId(comp.id);
-                        setShowCompanyDropdown(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-800 transition-colors cursor-pointer ${
-                        activeCompanyId === comp.id ? 'bg-blue-950/60 text-blue-400 font-bold' : ''
-                      }`}
-                    >
-                      <div>
-                        <div className="font-semibold text-slate-200">{comp.code} • {comp.name}</div>
-                        <div className="text-[10px] text-slate-400">{comp.city}, {comp.state}</div>
+                  {showCompanyDropdown && (
+                    <div className="absolute left-0 mt-2 w-72 bg-slate-900 rounded-xl shadow-2xl border border-slate-700 py-1.5 z-50 text-slate-200">
+                      <div className="px-3 py-1.5 border-b border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                        <span>Active Working Entity</span>
+                        <button 
+                          onClick={() => { setShowCompanyDropdown(false); navigate('companies'); }}
+                          className="text-blue-400 hover:underline cursor-pointer"
+                        >
+                          Manage Entities →
+                        </button>
                       </div>
-                      {activeCompanyId === comp.id && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
-                    </button>
-                  ))}
+
+                      <button
+                        onClick={() => {
+                          setActiveCompanyId('ALL');
+                          setShowCompanyDropdown(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-800 transition-colors cursor-pointer ${
+                          activeCompanyId === 'ALL' ? 'bg-blue-950/60 text-blue-400 font-bold' : ''
+                        }`}
+                      >
+                        <div>
+                          <div className="font-semibold text-slate-200">All Entities (Consolidated)</div>
+                          <div className="text-[10px] text-slate-400">Total Group View • Global Visibility</div>
+                        </div>
+                        {activeCompanyId === 'ALL' && <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />}
+                      </button>
+
+                      <div className="px-3 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-t border-slate-800/80 mt-1">
+                        Filter by Individual Company
+                      </div>
+
+                      {companies.map(comp => (
+                        <button
+                          key={comp.id}
+                          onClick={() => {
+                            setActiveCompanyId(comp.id);
+                            setShowCompanyDropdown(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-slate-800 transition-colors cursor-pointer ${
+                            activeCompanyId === comp.id ? 'bg-blue-950/60 text-blue-400 font-bold' : ''
+                          }`}
+                        >
+                          <div>
+                            <div className="font-semibold text-slate-200">{comp.code} • {comp.name}</div>
+                            <div className="text-[10px] text-slate-400">{comp.city}, {comp.state}</div>
+                          </div>
+                          {activeCompanyId === comp.id && <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div 
+                  className="flex items-center space-x-1.5 bg-slate-800/80 border border-slate-700 px-2.5 py-1 rounded-lg text-xs"
+                  title="Corporate Account: Access strictly isolated to your company entity"
+                >
+                  <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="font-bold text-slate-200 truncate max-w-[140px]">
+                    {activeCompany ? activeCompany.code : (currentUser.companyName || 'Company')}
+                  </span>
+                  <span className="text-[9px] bg-slate-700/90 text-blue-300 px-1.5 py-0.5 rounded font-medium">
+                    Company Scoped
+                  </span>
                 </div>
               )}
             </div>
@@ -314,10 +343,11 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {showRoleDropdown && (
                 <div className="absolute right-0 mt-2 w-64 bg-slate-900 rounded-xl shadow-2xl border border-slate-700 py-2 z-50 text-slate-200">
-                  <div className="px-3 py-1.5 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                    Switch Active User & Role
+                  <div className="px-3 py-1.5 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                    <span>{isSuperAdmin ? 'Switch User (Super Admin)' : 'Switch Role (Company)'}</span>
+                    <span className="text-[9px] bg-slate-800 text-slate-400 px-1 rounded">{availableSwitchUsers.length}</span>
                   </div>
-                  {allUsers.map((user) => (
+                  {availableSwitchUsers.map((user) => (
                     <button
                       key={user.id}
                       onClick={() => {

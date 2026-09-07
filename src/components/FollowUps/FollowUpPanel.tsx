@@ -17,7 +17,7 @@ import { FollowUpRecord, FollowUpMode } from '../../types';
 import { FollowUpEntryModal } from './FollowUpEntryModal';
 
 export const FollowUpPanel: React.FC = () => {
-  const { followUps, candidates, completeFollowUp } = useRecruitment();
+  const { followUps, candidates, completeFollowUp, activeCompanyId } = useRecruitment();
 
   const [tab, setTab] = useState<'TODAY' | 'OVERDUE' | 'UPCOMING' | 'COMPLETED'>('TODAY');
   const [selectedHr, setSelectedHr] = useState<string>('ALL');
@@ -27,11 +27,28 @@ export const FollowUpPanel: React.FC = () => {
   // Logging follow up for a candidate
   const [activeFollowUpCandidateId, setActiveFollowUpCandidateId] = useState<string | null>(null);
 
+  // Candidate ID to Company ID lookup map
+  const candidateCompanyMap = React.useMemo(() => {
+    return new Map(candidates.map(c => [
+      c.id, 
+      c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1')
+    ]));
+  }, [candidates]);
+
+  // Scope follow-ups by active company (or show all for Super Admin when 'ALL')
+  const scopedFollowUps = React.useMemo(() => {
+    if (activeCompanyId === 'ALL') return followUps;
+    return followUps.filter(f => {
+      const compId = candidateCompanyMap.get(f.candidateId);
+      return compId ? compId === activeCompanyId : true;
+    });
+  }, [followUps, activeCompanyId, candidateCompanyMap]);
+
   // Groupings based on followUpDate and isCompleted
-  const overdueFollowUps = followUps.filter((f) => !f.isCompleted && f.followUpDate < TODAY);
-  const todayFollowUps = followUps.filter((f) => f.followUpDate === TODAY && !f.isCompleted);
-  const upcomingFollowUps = followUps.filter((f) => !f.isCompleted && f.followUpDate > TODAY);
-  const completedFollowUps = followUps.filter((f) => f.isCompleted);
+  const overdueFollowUps = scopedFollowUps.filter((f) => !f.isCompleted && f.followUpDate < TODAY);
+  const todayFollowUps = scopedFollowUps.filter((f) => f.followUpDate === TODAY && !f.isCompleted);
+  const upcomingFollowUps = scopedFollowUps.filter((f) => !f.isCompleted && f.followUpDate > TODAY);
+  const completedFollowUps = scopedFollowUps.filter((f) => f.isCompleted);
 
   // Current tab items
   const currentList = (() => {

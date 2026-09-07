@@ -2,22 +2,30 @@ import React from 'react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 
 export const RecruitmentFunnel: React.FC = () => {
-  const { candidates } = useRecruitment();
+  const { candidates, activeCompanyId } = useRecruitment();
 
-  const totalLeads = candidates.length;
-  const contacted = candidates.filter(
+  const scopedCandidates = React.useMemo(() => {
+    if (activeCompanyId === 'ALL') return candidates;
+    return candidates.filter(c => {
+      const compId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
+      return compId === activeCompanyId;
+    });
+  }, [candidates, activeCompanyId]);
+
+  const totalLeads = scopedCandidates.length;
+  const contacted = scopedCandidates.filter(
     (c) => c.status !== 'New Lead' && c.status !== 'Not Contacted'
   ).length;
   
-  const interviews = candidates.filter((c) =>
+  const interviews = scopedCandidates.filter((c) =>
     ['Interview Scheduled', 'Interview Confirmed', 'Interview Conducted', 'Selected', 'Joined', 'Active Joining'].includes(c.status)
   ).length;
 
-  const selected = candidates.filter((c) =>
+  const selected = scopedCandidates.filter((c) =>
     ['Selected', 'Joined', 'Active Joining'].includes(c.status)
   ).length;
 
-  const active = candidates.filter((c) => c.isActiveJoining || c.status === 'Active Joining').length;
+  const active = scopedCandidates.filter((c) => c.isActiveJoining || c.status === 'Active Joining').length;
 
   // Conversion rates
   const leadToInterview = totalLeads > 0 ? Math.round((interviews / totalLeads) * 100) : 0;

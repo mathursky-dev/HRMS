@@ -27,7 +27,10 @@ import {
   Send,
   ExternalLink,
   FileCode,
-  Save
+  Save,
+  FileSpreadsheet,
+  PlusCircle,
+  UploadCloud
 } from 'lucide-react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 import { Company } from '../../types';
@@ -39,6 +42,7 @@ export const CompanyMaster: React.FC = () => {
     addCompany, 
     updateCompany, 
     deleteCompany, 
+    bulkImportCompanies,
     activeCompanyId, 
     setActiveCompanyId,
     departmentsList,
@@ -52,6 +56,14 @@ export const CompanyMaster: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'directory' | 'credentials'>('directory');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isCredentialsMasterOpen, setIsCredentialsMasterOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState<'table' | 'text'>('table');
+  const [bulkText, setBulkText] = useState('');
+  const [bulkRows, setBulkRows] = useState<Array<{ name: string; code: string; city: string; phone: string; adminUserId?: string }>>([
+    { name: '', code: '', city: 'Noida', phone: '', adminUserId: '' },
+    { name: '', code: '', city: 'Delhi', phone: '', adminUserId: '' },
+    { name: '', code: '', city: 'Gurugram', phone: '', adminUserId: '' },
+  ]);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null);
   const [notificationToast, setNotificationToast] = useState<{ type: 'success' | 'info'; message: string } | null>(null);
@@ -184,18 +196,20 @@ export const CompanyMaster: React.FC = () => {
     });
   };
 
-  const handleSaveCompany = (e: React.FormEvent) => {
+  const handleSaveCompany = (e: React.FormEvent, addAnother: boolean = false) => {
     e.preventDefault();
     const errors: Record<string, string> = {};
 
     if (!formData.name.trim()) errors.name = 'Company name is required';
     if (!formData.code.trim()) errors.code = 'Short code is required (e.g. ESL)';
-    if (!formData.address.trim()) errors.address = 'Address is required';
-    if (!formData.email.trim()) errors.email = 'Email address is required';
-    if (!formData.phone.trim()) errors.phone = 'Phone number is required';
 
-    const cleanUserId = formData.adminUserId.trim() || `${formData.code.toLowerCase().trim()}.admin`;
-    const cleanPassword = formData.adminPassword.trim() || `${formData.code.toUpperCase().trim()}@Corp2026`;
+    const cleanCode = formData.code.trim().toUpperCase();
+    const cleanName = formData.name.trim();
+    const cleanAddress = formData.address.trim() || `Corporate Office, ${formData.city.trim() || 'Delhi NCR'}`;
+    const cleanEmail = formData.email.trim() || `contact@${cleanCode.toLowerCase()}.com`;
+    const cleanPhone = formData.phone.trim() || '+91 98000 00000';
+    const cleanUserId = formData.adminUserId.trim() || `${cleanCode.toLowerCase()}.admin`;
+    const cleanPassword = formData.adminPassword.trim() || `${cleanCode}@Corp2026`;
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
@@ -204,17 +218,17 @@ export const CompanyMaster: React.FC = () => {
 
     if (editingCompany) {
       updateCompany(editingCompany.id, {
-        name: formData.name.trim(),
-        code: formData.code.trim().toUpperCase(),
-        legalName: formData.legalName.trim() || formData.name.trim(),
+        name: cleanName,
+        code: cleanCode,
+        legalName: formData.legalName.trim() || cleanName,
         cin: formData.cin.trim(),
         gstin: formData.gstin.trim(),
-        address: formData.address.trim(),
+        address: cleanAddress,
         city: formData.city.trim(),
         state: formData.state.trim(),
         pincode: formData.pincode.trim(),
-        email: formData.email.trim(),
-        phone: formData.phone.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
         website: formData.website.trim(),
         departments: formData.departments,
         isActive: formData.isActive,
@@ -222,20 +236,25 @@ export const CompanyMaster: React.FC = () => {
         adminPassword: cleanPassword,
         masterContactPerson: formData.masterContactPerson.trim() || 'Director / Managing Head',
         lastPasswordChanged: new Date().toISOString(),
+      });
+      setIsAddModalOpen(false);
+      setNotificationToast({
+        type: 'success',
+        message: `Company "${cleanName}" updated successfully in CRM, Database & Source.`,
       });
     } else {
       addCompany({
-        name: formData.name.trim(),
-        code: formData.code.trim().toUpperCase(),
-        legalName: formData.legalName.trim() || formData.name.trim(),
+        name: cleanName,
+        code: cleanCode,
+        legalName: formData.legalName.trim() || cleanName,
         cin: formData.cin.trim(),
         gstin: formData.gstin.trim(),
-        address: formData.address.trim(),
+        address: cleanAddress,
         city: formData.city.trim(),
         state: formData.state.trim(),
         pincode: formData.pincode.trim(),
-        email: formData.email.trim(),
-        phone: formData.phone.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
         website: formData.website.trim(),
         departments: formData.departments,
         isActive: formData.isActive,
@@ -244,14 +263,127 @@ export const CompanyMaster: React.FC = () => {
         masterContactPerson: formData.masterContactPerson.trim() || 'Director / Managing Head',
         lastPasswordChanged: new Date().toISOString(),
       });
+
+      if (addAnother) {
+        setFormData({
+          name: '',
+          code: '',
+          legalName: '',
+          cin: '',
+          gstin: '',
+          address: '',
+          city: 'Noida',
+          state: 'Uttar Pradesh',
+          pincode: '201309',
+          email: '',
+          phone: '',
+          website: '',
+          departments: ['HR Recruitment'],
+          isActive: true,
+          adminUserId: '',
+          adminPassword: 'Corp@2026',
+          masterContactPerson: '',
+        });
+        setFormErrors({});
+        setNotificationToast({
+          type: 'success',
+          message: `Company "${cleanName}" created! Enter details for the next company below.`,
+        });
+      } else {
+        setIsAddModalOpen(false);
+        setNotificationToast({
+          type: 'success',
+          message: `Company "${cleanName}" created successfully in CRM, Database & Source.`,
+        });
+      }
+    }
+    setTimeout(() => setNotificationToast(null), 4500);
+  };
+
+  const handleLoadSampleBulk = () => {
+    setBulkRows([
+      { name: 'Apex Global Logistics Pvt Ltd', code: 'AGL', city: 'Mumbai', phone: '+91 98201 11222', adminUserId: 'agl.admin' },
+      { name: 'Starlight Retail Ventures Ltd', code: 'SRV', city: 'Bengaluru', phone: '+91 98450 33445', adminUserId: 'srv.admin' },
+      { name: 'OmniTech Solutions Pvt Ltd', code: 'OTS', city: 'Hyderabad', phone: '+91 98660 55667', adminUserId: 'ots.admin' },
+    ]);
+  };
+
+  const handleBulkSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const companiesToRegister: Array<Omit<Company, 'id' | 'createdAt'>> = [];
+
+    if (bulkMode === 'table') {
+      bulkRows.forEach(row => {
+        const name = row.name.trim();
+        const code = (row.code.trim() || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (name && code) {
+          companiesToRegister.push({
+            name,
+            code,
+            legalName: name,
+            cin: '',
+            gstin: '',
+            address: `Corporate Office, ${row.city.trim() || 'Delhi NCR'}`,
+            city: row.city.trim() || 'Noida',
+            state: 'Uttar Pradesh',
+            pincode: '201301',
+            email: `contact@${code.toLowerCase()}.com`,
+            phone: row.phone.trim() || '+91 98000 00000',
+            website: `https://${code.toLowerCase()}.com`,
+            departments: ['HR Recruitment', 'Corporate Operations'],
+            isActive: true,
+            adminUserId: row.adminUserId?.trim().toLowerCase() || `${code.toLowerCase()}.admin`,
+            adminPassword: `${code}@Corp2026`,
+            masterContactPerson: 'Director / Managing Head',
+            lastPasswordChanged: new Date().toISOString(),
+          });
+        }
+      });
+    } else {
+      const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+      lines.forEach(line => {
+        const parts = line.split(',').map(p => p.trim());
+        const name = parts[0];
+        if (name) {
+          const code = (parts[1] || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const city = parts[2] || 'Noida';
+          const phone = parts[3] || '+91 98000 00000';
+          companiesToRegister.push({
+            name,
+            code,
+            legalName: name,
+            cin: '',
+            gstin: '',
+            address: `Corporate Office, ${city}`,
+            city,
+            state: 'Uttar Pradesh',
+            pincode: '201301',
+            email: `contact@${code.toLowerCase()}.com`,
+            phone,
+            website: `https://${code.toLowerCase()}.com`,
+            departments: ['HR Recruitment', 'Corporate Operations'],
+            isActive: true,
+            adminUserId: `${code.toLowerCase()}.admin`,
+            adminPassword: `${code}@Corp2026`,
+            masterContactPerson: 'Director / Managing Head',
+            lastPasswordChanged: new Date().toISOString(),
+          });
+        }
+      });
     }
 
-    setIsAddModalOpen(false);
+    if (companiesToRegister.length === 0) {
+      alert('Please enter at least one company name to add.');
+      return;
+    }
+
+    const result = bulkImportCompanies(companiesToRegister, true);
+    setIsBulkModalOpen(false);
     setNotificationToast({
       type: 'success',
-      message: `Company details saved and updated in source code (src/mockData.ts).`,
+      message: `Successfully registered ${result.importedCount} new company entities! (${result.skippedCount} skipped as already existing).`,
     });
-    setTimeout(() => setNotificationToast(null), 4500);
+    setTimeout(() => setNotificationToast(null), 5000);
   };
 
   const handleDelete = (id: string, name: string) => {
@@ -359,6 +491,16 @@ export const CompanyMaster: React.FC = () => {
             <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-600/60 text-[10px]">
               {totalWithCredentials}
             </span>
+          </button>
+
+          <button
+            id="btn-bulk-add-companies"
+            onClick={() => setIsBulkModalOpen(true)}
+            className="inline-flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            title="Add or import multiple company entities at once"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Add Multiple Companies</span>
           </button>
 
           <button

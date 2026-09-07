@@ -18,7 +18,7 @@ import { InterviewRecord, AttendanceStatus } from '../../types';
 import { InterviewEvaluationModal } from './InterviewEvaluationModal';
 
 export const InterviewPanel: React.FC = () => {
-  const { interviews, updateInterviewAttendance } = useRecruitment();
+  const { interviews, updateInterviewAttendance, candidates, activeCompanyId } = useRecruitment();
 
   const [tab, setTab] = useState<'TODAY' | 'UPCOMING' | 'CONDUCTED' | 'NOSHOW'>('TODAY');
   const [selectedHr, setSelectedHr] = useState<string>('ALL');
@@ -27,11 +27,28 @@ export const InterviewPanel: React.FC = () => {
 
   const [evaluatingInterview, setEvaluatingInterview] = useState<InterviewRecord | null>(null);
 
+  // Candidate ID to Company ID lookup map
+  const candidateCompanyMap = React.useMemo(() => {
+    return new Map(candidates.map(c => [
+      c.id, 
+      c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1')
+    ]));
+  }, [candidates]);
+
+  // Scope interviews by active company (or show all for Super Admin when 'ALL')
+  const scopedInterviews = React.useMemo(() => {
+    if (activeCompanyId === 'ALL') return interviews;
+    return interviews.filter(i => {
+      const compId = candidateCompanyMap.get(i.candidateId) || (i.department?.toLowerCase().includes('bkd') ? 'comp-2' : 'comp-1');
+      return compId === activeCompanyId;
+    });
+  }, [interviews, activeCompanyId, candidateCompanyMap]);
+
   // Filter based on tab
-  const todayInterviews = interviews.filter((i) => i.interviewDate === TODAY);
-  const upcomingInterviews = interviews.filter((i) => i.interviewDate > TODAY);
-  const conductedInterviews = interviews.filter((i) => i.attendanceStatus === 'Conducted');
-  const noShowInterviews = interviews.filter((i) => i.attendanceStatus === 'No Show');
+  const todayInterviews = scopedInterviews.filter((i) => i.interviewDate === TODAY);
+  const upcomingInterviews = scopedInterviews.filter((i) => i.interviewDate > TODAY);
+  const conductedInterviews = scopedInterviews.filter((i) => i.attendanceStatus === 'Conducted');
+  const noShowInterviews = scopedInterviews.filter((i) => i.attendanceStatus === 'No Show');
 
   const currentList = (() => {
     switch (tab) {

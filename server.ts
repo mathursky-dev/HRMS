@@ -314,6 +314,32 @@ async function startServer() {
     });
   });
 
+  // Clear demo and dummy records from Supabase tables
+  app.post('/api/supabase/clear-demo', async (req, res) => {
+    const client = supabaseClient;
+    if (!client) {
+      return res.status(500).json({ success: false, error: 'Supabase client not initialized' });
+    }
+
+    try {
+      // 1. Delete test interviews
+      await client.from('interviews').delete().like('id', 'test-%');
+      // 2. Delete test follow ups
+      await client.from('follow_ups').delete().like('id', 'test-%');
+      // 3. Delete test offer letters
+      await client.from('offer_letters').delete().or('id.like.off-test%,id.like.OFR-2026-%');
+      // 4. Delete test candidates (TEST-2026-* or remarks like TEST DATA)
+      await client.from('candidates').delete().like('id', 'TEST-%');
+      await client.from('candidates').delete().ilike('remarks', '%TEST DATA%');
+      // 5. Delete test job openings (job-1, job-2, etc. and job-test)
+      await client.from('job_openings').delete().like('id', 'job-%');
+
+      return res.json({ success: true, message: 'Demo data cleared from Supabase' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to clear demo data' });
+    }
+  });
+
   // 4. Sync CRM Data to Supabase via Server-side Upsert
   app.post('/api/supabase/sync', async (req, res) => {
     const client = supabaseClient;
@@ -336,10 +362,31 @@ async function startServer() {
       targetSettings = [],
       termsClauses = [],
       auditLogs = [],
+      deletedCompanyIds = [],
     } = req.body || {};
 
     const syncedCounts: Record<string, number> = {};
     const errors: string[] = [];
+
+    // If deleted companies are specified, purge them from Supabase first
+    if (Array.isArray(deletedCompanyIds) && deletedCompanyIds.length > 0 && client) {
+      for (const compId of deletedCompanyIds) {
+        if (!compId) continue;
+        try {
+          await client.from('departments').update({ company_id: null }).eq('company_id', compId);
+          await client.from('users').update({ company_id: null }).eq('company_id', compId);
+          await client.from('candidates').update({ company_id: null }).eq('company_id', compId);
+          await client.from('job_openings').update({ company_id: null }).eq('company_id', compId);
+          await client.from('offer_letters').update({ company_id: null }).eq('company_id', compId);
+          await client.from('target_settings').update({ company_id: null }).eq('company_id', compId);
+          await client.from('companies').delete().eq('id', compId);
+          await client.from('companies').delete().eq('code', compId);
+          console.log(`[Supabase Sync] Purged deleted company ${compId} from database.`);
+        } catch (delErr: any) {
+          console.warn(`[Supabase Sync] Warning purging deleted company ${compId}:`, delErr?.message);
+        }
+      }
+    }
 
     // Track valid IDs for relational integrity
     const validCompanyIds = new Set<string>();
@@ -956,12 +1003,56 @@ async function startServer() {
     }
   });
 
-  // 6. Direct Source Code Sync for Companies (updates src/mockData.ts)
-  app.post('/api/companies/sync-source', (req, res) => {
+  // Helper to map company to Supabase row format
+  function companyToDbRow(c: any) {
+    if (!c) return null;
+    return {
+      id: c.id,
+      name: c.name || '',
+      code: c.code || '',
+      legal_name: c.legalName || c.legal_name || null,
+      cin: c.cin || null,
+      gstin: c.gstin || null,
+      address: c.address || '',
+      city: c.city || '',
+      state: c.state || '',
+      pincode: c.pincode || null,
+      phone: c.phone || '',
+      email: c.email || '',
+      logo_url: c.logoUrl || c.logo_url || null,
+      website: c.website || null,
+      departments: Array.isArray(c.departments) ? c.departments : [],
+      is_active: Boolean(c.isActive ?? c.is_active ?? true),
+      admin_user_id: c.adminUserId || c.admin_user_id || null,
+      admin_password: c.adminPassword || c.admin_password || null,
+      master_contact_person: c.masterContactPerson || c.master_contact_person || null,
+      last_password_changed: c.lastPasswordChanged || c.last_password_changed || null,
+      created_at: c.createdAt || c.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  // 6. Direct Source Code & Supabase Sync for Companies
+  app.post('/api/companies/sync-source', async (req, res) => {
     try {
       const { companies } = req.body || {};
       if (!Array.isArray(companies)) {
         return res.status(400).json({ success: false, error: 'Expected an array of companies' });
+      }
+
+      // 1. Also update Supabase database immediately!
+      if (supabaseClient && companies.length > 0) {
+        try {
+          const dbRows = companies.map(companyToDbRow).filter(Boolean);
+          const { error } = await supabaseClient.from('companies').upsert(dbRows, { onConflict: 'id' });
+          if (error) {
+            console.warn('[Supabase Sync Companies] Error:', error.message);
+          } else {
+            console.log(`[Supabase Sync Companies] Synchronized ${dbRows.length} companies to database.`);
+          }
+        } catch (dbErr: any) {
+          console.warn('[Supabase Sync Companies] DB error:', dbErr?.message);
+        }
       }
 
       const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
@@ -981,7 +1072,7 @@ async function startServer() {
         console.log(`[Source Code Sync] Updated src/mockData.ts with ${companies.length} companies.`);
         return res.json({ 
           success: true, 
-          message: `Successfully synchronized ${companies.length} company records to src/mockData.ts`,
+          message: `Successfully synchronized ${companies.length} company records to Supabase & src/mockData.ts`,
           count: companies.length 
         });
       } else {
@@ -993,6 +1084,108 @@ async function startServer() {
     }
   });
 
+  // 6b. Add or Upsert Single Company API
+  app.post('/api/companies', async (req, res) => {
+    try {
+      const company = req.body;
+      if (!company || !company.id) {
+        return res.status(400).json({ success: false, error: 'Valid company object with id is required' });
+      }
+
+      // 1. Upsert into Supabase
+      if (supabaseClient) {
+        try {
+          const dbRow = companyToDbRow(company);
+          const { error } = await supabaseClient.from('companies').upsert(dbRow, { onConflict: 'id' });
+          if (error) console.warn('[Supabase Add Company] Error:', error.message);
+        } catch (dbErr: any) {
+          console.warn('[Supabase Add Company] DB error:', dbErr?.message);
+        }
+      }
+
+      // 2. Append or update in src/mockData.ts
+      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
+      if (fs.existsSync(mockDataPath)) {
+        let content = fs.readFileSync(mockDataPath, 'utf8');
+        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*(\[[\s\S]*?\n\]);/;
+        const match = content.match(regex);
+        if (match) {
+          try {
+            const list = JSON.parse(match[1]);
+            const existingIdx = list.findIndex((c: any) => c.id === company.id || (c.code && c.code === company.code));
+            if (existingIdx >= 0) {
+              list[existingIdx] = { ...list[existingIdx], ...company };
+            } else {
+              list.push(company);
+            }
+            const formatted = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(list, null, 2) + ';';
+            content = content.replace(regex, formatted);
+            fs.writeFileSync(mockDataPath, content, 'utf8');
+          } catch (jsonErr) {
+            console.warn('[MockData Add Company] JSON parse error:', jsonErr);
+          }
+        }
+      }
+
+      return res.json({ success: true, company });
+    } catch (err: any) {
+      console.error('Error adding company:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to add company' });
+    }
+  });
+
+  // 6c. Batch Add/Upsert Companies API
+  app.post('/api/companies/batch', async (req, res) => {
+    try {
+      const { companies } = req.body || {};
+      if (!Array.isArray(companies) || companies.length === 0) {
+        return res.status(400).json({ success: false, error: 'Array of companies required' });
+      }
+
+      // 1. Upsert into Supabase
+      if (supabaseClient) {
+        try {
+          const dbRows = companies.map(companyToDbRow).filter(Boolean);
+          const { error } = await supabaseClient.from('companies').upsert(dbRows, { onConflict: 'id' });
+          if (error) console.warn('[Supabase Batch Companies] Error:', error.message);
+        } catch (dbErr: any) {
+          console.warn('[Supabase Batch Companies] DB error:', dbErr?.message);
+        }
+      }
+
+      // 2. Update src/mockData.ts
+      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
+      if (fs.existsSync(mockDataPath)) {
+        let content = fs.readFileSync(mockDataPath, 'utf8');
+        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*(\[[\s\S]*?\n\]);/;
+        const match = content.match(regex);
+        if (match) {
+          try {
+            const list = JSON.parse(match[1]);
+            companies.forEach((newComp: any) => {
+              const existingIdx = list.findIndex((c: any) => c.id === newComp.id || (c.code && c.code === newComp.code));
+              if (existingIdx >= 0) {
+                list[existingIdx] = { ...list[existingIdx], ...newComp };
+              } else {
+                list.push(newComp);
+              }
+            });
+            const formatted = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(list, null, 2) + ';';
+            content = content.replace(regex, formatted);
+            fs.writeFileSync(mockDataPath, content, 'utf8');
+          } catch (jsonErr) {
+            console.warn('[MockData Batch Companies] JSON parse error:', jsonErr);
+          }
+        }
+      }
+
+      return res.json({ success: true, count: companies.length });
+    } catch (err: any) {
+      console.error('Error batch adding companies:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to batch add companies' });
+    }
+  });
+
   app.get('/api/companies/sync-status', (req, res) => {
     const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
     if (!fs.existsSync(mockDataPath)) {
@@ -1000,6 +1193,66 @@ async function startServer() {
     }
     const stat = fs.statSync(mockDataPath);
     return res.json({ exists: true, lastModified: stat.mtime });
+  });
+
+  // 6b. Delete Company API (Deletes from Supabase AND updates src/mockData.ts)
+  app.delete('/api/companies/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      console.log(`[Company Delete] Received request to delete company: ${id}`);
+      
+      // 1. Supabase deletion
+      if (supabaseClient) {
+        try {
+          // Unlink dependent tables to avoid foreign key violations
+          await supabaseClient.from('departments').update({ company_id: null }).eq('company_id', id);
+          await supabaseClient.from('users').update({ company_id: null }).eq('company_id', id);
+          await supabaseClient.from('candidates').update({ company_id: null }).eq('company_id', id);
+          await supabaseClient.from('job_openings').update({ company_id: null }).eq('company_id', id);
+          await supabaseClient.from('offer_letters').update({ company_id: null }).eq('company_id', id);
+          await supabaseClient.from('target_settings').update({ company_id: null }).eq('company_id', id);
+
+          const { error: err1 } = await supabaseClient.from('companies').delete().eq('id', id);
+          const { error: err2 } = await supabaseClient.from('companies').delete().eq('code', id);
+          if (err1 && err2) {
+            console.warn(`[Supabase] Could not delete company ${id}:`, err1.message);
+          } else {
+            console.log(`[Supabase] Company ${id} permanently deleted from Supabase database.`);
+          }
+        } catch (dbErr: any) {
+          console.warn(`[Supabase] Error executing delete for company ${id}:`, dbErr?.message || dbErr);
+        }
+      }
+
+      // 2. Update source code (src/mockData.ts)
+      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
+      if (fs.existsSync(mockDataPath)) {
+        let content = fs.readFileSync(mockDataPath, 'utf8');
+        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*\[([\s\S]*?)\n\];/;
+        const match = content.match(regex);
+        if (match) {
+          try {
+            const rawArrayStr = '[' + match[1] + ']';
+            const existingCompanies = JSON.parse(rawArrayStr);
+            const filtered = existingCompanies.filter((c: any) => c.id !== id && c.code !== id);
+            const formattedArray = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(filtered, null, 2) + ';';
+            content = content.replace(regex, formattedArray);
+            fs.writeFileSync(mockDataPath, content, 'utf8');
+            console.log(`[Source Code Sync] Removed company ${id} from src/mockData.ts. Remaining: ${filtered.length}`);
+          } catch (jsonErr) {
+            console.warn('[Source Code Sync] Error updating mockData.ts JSON:', jsonErr);
+          }
+        }
+      }
+
+      return res.json({ 
+        success: true, 
+        message: `Company ${id} deleted successfully from Supabase database and source code.` 
+      });
+    } catch (err: any) {
+      console.error(`Error removing company ${id}:`, err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to delete company' });
+    }
   });
 
   // 7. Delete User API

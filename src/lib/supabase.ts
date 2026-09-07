@@ -1246,6 +1246,39 @@ export async function deleteCandidateFromSupabase(id: string): Promise<{ success
   }
 }
 
+export async function deleteCompanyFromSupabase(id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/companies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: data.success ?? true };
+    }
+  } catch {
+    // fallback to client-side
+  }
+
+  const client = getSupabaseClient();
+  if (!client) return { success: false, error: 'Supabase client not initialized' };
+
+  try {
+    await client.from('departments').update({ company_id: null }).eq('company_id', id);
+    await client.from('users').update({ company_id: null }).eq('company_id', id);
+    await client.from('candidates').update({ company_id: null }).eq('company_id', id);
+    await client.from('job_openings').update({ company_id: null }).eq('company_id', id);
+    await client.from('offer_letters').update({ company_id: null }).eq('company_id', id);
+    await client.from('target_settings').update({ company_id: null }).eq('company_id', id);
+
+    const { error: err1 } = await client.from('companies').delete().eq('id', id);
+    const { error: err2 } = await client.from('companies').delete().eq('code', id);
+    if (err1 && err2) {
+      return { success: false, error: err1.message };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Failed to delete company' };
+  }
+}
+
 /**
  * Complete PostgreSQL DDL Script for Supabase SQL Editor
  */

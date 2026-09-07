@@ -3,13 +3,14 @@ import { useRecruitment } from '../../context/RecruitmentContext';
 import { TODAY } from '../../mockData';
 
 export const TargetCards: React.FC = () => {
-  const { candidates, interviews } = useRecruitment();
+  const { candidates, interviews, activeCompanyId } = useRecruitment();
 
-  const hrTargets = [
+  const allHrTargets = [
     {
       name: 'Nandani',
       dept: 'HR',
-      role: 'HR Recruitment',
+      companyId: 'comp-1',
+      role: 'HR Recruitment (ESL)',
       dailyInterviewTarget: 5,
       monthlyActiveTarget: 20,
       themeColor: 'text-blue-600',
@@ -18,6 +19,7 @@ export const TargetCards: React.FC = () => {
     {
       name: 'Shivani',
       dept: 'BKD',
+      companyId: 'comp-2',
       role: 'BKD Recruitment',
       dailyInterviewTarget: 5,
       monthlyActiveTarget: 20,
@@ -25,6 +27,10 @@ export const TargetCards: React.FC = () => {
       barColor: 'bg-orange-500',
     },
   ];
+
+  const hrTargets = activeCompanyId === 'ALL'
+    ? allHrTargets
+    : allHrTargets.filter(h => h.companyId === activeCompanyId);
 
   return (
     <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex-grow">

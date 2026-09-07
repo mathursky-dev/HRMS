@@ -295,6 +295,14 @@ export interface JobOpening {
   hrResponsible: string;
   hiringDeadline: string;
   status: 'Open' | 'Urgent' | 'Hold' | 'Closed';
+  // Optional aliases for backward compatibility
+  title?: string;
+  openings?: number;
+  filled?: number;
+  experienceRequired?: string;
+  location?: string;
+  companyId?: string;
+  companyName?: string;
 }
 
 export interface SourceAdSpend {

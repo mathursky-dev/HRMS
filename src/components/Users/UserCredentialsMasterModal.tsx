@@ -291,13 +291,20 @@ export const UserCredentialsMasterModal: React.FC<UserCredentialsMasterModalProp
                               {user.name.charAt(0)}
                             </div>
                             <div>
-                              <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
                                 <span>{user.name}</span>
                                 {isCurrent && (
                                   <span className="px-1.5 py-0.2 rounded bg-blue-100 text-blue-700 text-[9px] font-bold">
                                     You
                                   </span>
                                 )}
+                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                                  user.status === 'Inactive' 
+                                    ? 'bg-slate-100 text-slate-500 border-slate-200' 
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}>
+                                  {user.status === 'Inactive' ? 'Inactive' : 'Active'}
+                                </span>
                               </div>
                               <div className="text-[10px] text-slate-400 truncate max-w-[170px]">{user.email}</div>
                             </div>

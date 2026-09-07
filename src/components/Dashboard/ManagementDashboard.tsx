@@ -4,6 +4,7 @@ import { TODAY } from '../../mockData';
 import { TargetCards } from './TargetCards';
 import { HrControlRoom } from './HrControlRoom';
 import { RecruitmentFunnel } from './RecruitmentFunnel';
+import { HiringStatusDonutChart } from './HiringStatusDonutChart';
 
 interface ManagementDashboardProps {
   onOpenAddCandidate: () => void;
@@ -186,6 +187,14 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
         </section>
 
       </div>
+
+      {/* Hiring Pipeline Status Donut Chart (Supabase Candidates Table) */}
+      <section className="w-full">
+        <HiringStatusDonutChart 
+          onNavigate={onNavigate} 
+          onOpenAddCandidate={onOpenAddCandidate} 
+        />
+      </section>
 
       {/* Bottom Section: Funnel Overview & Active Openings */}
       <section className="flex flex-col lg:flex-row gap-4">

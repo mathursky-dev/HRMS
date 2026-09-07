@@ -25,7 +25,13 @@ import {
   Sparkles,
   RefreshCw,
   Lock,
-  Send
+  Send,
+  AlertCircle,
+  AlertTriangle,
+  UserX,
+  ToggleLeft,
+  ToggleRight,
+  Power
 } from 'lucide-react';
 import { useRecruitment } from '../../context/RecruitmentContext';
 import { UserProfile, UserRole, Department } from '../../types';
@@ -47,10 +53,15 @@ export const UserManagement: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [deptFilter, setDeptFilter] = useState<string>('ALL');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isPermissionsModalOpen, setIsPermissionsModalOpen] = useState(false);
   const [isCredentialsMasterOpen, setIsCredentialsMasterOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+
+  // In-app delete user confirmation state & toast notifications
+  const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
+  const [actionToast, setActionToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Credentials and Quick Actions State
   const [visibleTablePasswords, setVisibleTablePasswords] = useState<Record<string, boolean>>({});
@@ -185,16 +196,69 @@ export const UserManagement: React.FC = () => {
 
   const handleDeleteUser = (user: UserProfile) => {
     if (user.id === currentUser.id) {
-      alert('You cannot delete the currently logged in user profile.');
+      setActionToast({
+        type: 'error',
+        message: `You cannot delete the active logged-in user profile (${user.name}). Please switch to another user before deleting this profile.`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
       return;
     }
     if (allUsers.length <= 1) {
-      alert('At least one user must remain in the system.');
+      setActionToast({
+        type: 'error',
+        message: 'Cannot delete user: At least one user profile must remain in the system to administer the CRM.',
+      });
+      setTimeout(() => setActionToast(null), 5000);
       return;
     }
-    if (confirm(`Remove user ${user.name} (${user.role}) from the team?`)) {
-      deleteUser(user.id);
+    setUserToDelete(user);
+  };
+
+  const handleConfirmDeleteUser = () => {
+    if (!userToDelete) return;
+    const targetName = userToDelete.name;
+    const targetRole = userToDelete.role;
+    const targetId = userToDelete.id;
+    deleteUser(targetId);
+    setUserToDelete(null);
+    setActionToast({
+      type: 'success',
+      message: `User "${targetName}" (${targetRole}) was successfully removed from the team.`,
+    });
+    setTimeout(() => setActionToast(null), 4500);
+  };
+
+  // Toggle user active/inactive status
+  const handleToggleUserStatus = (user: UserProfile) => {
+    const currentStatus = user.status || 'Active';
+    const nextStatus: 'Active' | 'Inactive' = currentStatus === 'Active' ? 'Inactive' : 'Active';
+
+    // Guard: Prevent deactivating the active logged-in user
+    if (nextStatus === 'Inactive' && user.id === currentUser.id) {
+      setActionToast({
+        type: 'error',
+        message: `Cannot deactivate active logged-in user (${user.name}). Please switch active user profile before deactivating.`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
+      return;
     }
+
+    updateUser(user.id, { status: nextStatus });
+
+    // Sync status change to backend API/Supabase if available
+    try {
+      fetch(`/api/users/${encodeURIComponent(user.id)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      }).catch(() => {});
+    } catch (e) { /* ignore */ }
+
+    setActionToast({
+      type: 'success',
+      message: `User "${user.name}" is now ${nextStatus === 'Active' ? 'Active (available for assignments)' : 'Inactive (login disabled)'}.`,
+    });
+    setTimeout(() => setActionToast(null), 4000);
   };
 
   // Filtered Users
@@ -210,10 +274,13 @@ export const UserManagement: React.FC = () => {
 
     const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
     const matchesDept = deptFilter === 'ALL' || u.department === deptFilter;
+    const matchesStatus = statusFilter === 'ALL' || (u.status || 'Active') === statusFilter;
 
-    return matchesSearch && matchesRole && matchesDept;
+    return matchesSearch && matchesRole && matchesDept && matchesStatus;
   });
 
+  const activeCount = allUsers.filter(u => (u.status || 'Active') === 'Active').length;
+  const inactiveCount = allUsers.filter(u => u.status === 'Inactive').length;
   const totalDailyTarget = allUsers.reduce((sum, u) => sum + (u.dailyInterviewTarget || 0), 0);
   const totalMonthlyTarget = allUsers.reduce((sum, u) => sum + (u.monthlyActiveJoiningTarget || 0), 0);
   const totalHrTeam = allUsers.filter(u => u.role === 'HR Executive' || u.role === 'HR Head' || u.role === 'Recruiter').length;
@@ -266,6 +333,34 @@ export const UserManagement: React.FC = () => {
         </div>
       </div>
 
+      {/* Action Notification Toast Banner */}
+      {actionToast && (
+        <div 
+          id="user-management-toast-banner"
+          className={`p-3.5 rounded-xl border flex items-center justify-between text-xs font-medium animate-in fade-in slide-in-from-top-1 duration-200 ${
+            actionToast.type === 'success' 
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+              : 'bg-rose-50 text-rose-800 border-rose-200'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            {actionToast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{actionToast.message}</span>
+          </div>
+          <button 
+            id="btn-close-action-toast"
+            onClick={() => setActionToast(null)} 
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -273,9 +368,18 @@ export const UserManagement: React.FC = () => {
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Users</span>
             <Users className="w-4 h-4 text-blue-500" />
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
+          <div className="mt-2 flex items-baseline gap-2 flex-wrap">
             <span className="text-2xl font-black text-slate-900">{allUsers.length}</span>
-            <span className="text-xs text-slate-500">active profiles</span>
+            <div className="flex items-center gap-1.5 text-[10px] font-bold">
+              <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                {activeCount} Active
+              </span>
+              {inactiveCount > 0 && (
+                <span className="text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                  {inactiveCount} Inactive
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -345,12 +449,24 @@ export const UserManagement: React.FC = () => {
           <select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
-            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white text-slate-700 font-medium"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white text-slate-700 font-medium cursor-pointer"
           >
             <option value="ALL">All Departments</option>
             {departmentsList.map(d => (
               <option key={d.id} value={d.name}>{d.name}</option>
             ))}
+          </select>
+
+          {/* Status Filter */}
+          <select
+            id="select-filter-user-status"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white text-slate-700 font-medium cursor-pointer"
+          >
+            <option value="ALL">All Status ({allUsers.length})</option>
+            <option value="Active">Active Only ({activeCount})</option>
+            <option value="Inactive">Inactive Only ({inactiveCount})</option>
           </select>
         </div>
 
@@ -535,17 +651,37 @@ export const UserManagement: React.FC = () => {
                         )}
                       </td>
 
-                      {/* Status */}
+                      {/* Status Toggle Button */}
                       <td className="py-3 px-4 text-center">
-                        {user.status === 'Inactive' ? (
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">
-                            Inactive
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200">
-                            Active
-                          </span>
-                        )}
+                        <button
+                          id={`btn-toggle-status-cell-${user.id}`}
+                          type="button"
+                          onClick={() => handleToggleUserStatus(user)}
+                          title={
+                            isCurrent && (user.status || 'Active') === 'Active'
+                              ? "Active session user cannot be deactivated"
+                              : (user.status === 'Inactive' ? "Click to Activate this user" : "Click to Deactivate this user")
+                          }
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all shadow-2xs cursor-pointer ${
+                            user.status === 'Inactive'
+                              ? 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200 hover:text-slate-800'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 hover:border-emerald-400'
+                          }`}
+                        >
+                          <span 
+                            className={`w-2 h-2 rounded-full ${
+                              user.status === 'Inactive' 
+                                ? 'bg-slate-400' 
+                                : 'bg-emerald-500 animate-pulse'
+                            }`} 
+                          />
+                          <span>{user.status === 'Inactive' ? 'Inactive' : 'Active'}</span>
+                          {user.status === 'Inactive' ? (
+                            <ToggleLeft className="w-3.5 h-3.5 text-slate-400 ml-0.5" />
+                          ) : (
+                            <ToggleRight className="w-3.5 h-3.5 text-emerald-600 ml-0.5" />
+                          )}
+                        </button>
                       </td>
 
                       {/* Actions */}
@@ -561,6 +697,23 @@ export const UserManagement: React.FC = () => {
                             </button>
                           )}
                           <button
+                            id={`btn-toggle-status-action-${user.id}`}
+                            type="button"
+                            onClick={() => handleToggleUserStatus(user)}
+                            title={user.status === 'Inactive' ? `Set ${user.name} to Active` : `Set ${user.name} to Inactive`}
+                            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+                              user.status === 'Inactive'
+                                ? 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'
+                                : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                            }`}
+                          >
+                            {user.status === 'Inactive' ? (
+                              <UserCheck className="w-3.5 h-3.5" />
+                            ) : (
+                              <UserX className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                          <button
                             onClick={() => handleOpenEdit(user)}
                             title="Edit User"
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
@@ -568,9 +721,14 @@ export const UserManagement: React.FC = () => {
                             <Edit className="w-3.5 h-3.5" />
                           </button>
                           <button
+                            id={`btn-delete-user-${user.id}`}
                             onClick={() => handleDeleteUser(user)}
-                            title="Delete User"
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                            title={isCurrent ? "Active logged-in user profile cannot be deleted" : `Delete ${user.name}`}
+                            className={`p-1.5 rounded-md transition-colors ${
+                              isCurrent 
+                                ? 'text-slate-300 hover:text-slate-400 cursor-not-allowed' 
+                                : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer'
+                            }`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -827,35 +985,96 @@ export const UserManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Active status */}
-              <div className="flex items-center space-x-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="user-is-active"
-                  checked={formData.status === 'Active'}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.checked ? 'Active' : 'Inactive' })}
-                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 cursor-pointer"
-                />
-                <label htmlFor="user-is-active" className="text-xs font-semibold text-slate-700 cursor-pointer">
-                  User is active and available for lead assignment
-                </label>
+              {/* Active / Inactive Status Selector */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[11px] font-bold uppercase text-slate-600 tracking-wider">
+                    Account Status
+                  </label>
+                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    formData.status === 'Active'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${formData.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                    {formData.status === 'Active' ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100/90 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    id="btn-modal-status-active"
+                    onClick={() => setFormData({ ...formData, status: 'Active' })}
+                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      formData.status === 'Active'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Active User</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    id="btn-modal-status-inactive"
+                    onClick={() => setFormData({ ...formData, status: 'Inactive' })}
+                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      formData.status === 'Inactive'
+                        ? 'bg-slate-700 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    }`}
+                  >
+                    <UserX className="w-3.5 h-3.5" />
+                    <span>Inactive User</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${formData.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                  {formData.status === 'Active' 
+                    ? 'Active user: Allowed to log in and available for candidate & interview assignments.' 
+                    : 'Inactive user: Login disabled and hidden from new lead assignment queues.'}
+                </p>
               </div>
 
               {/* Modal Footer */}
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-600 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-xs font-semibold text-white shadow-xs cursor-pointer"
-                >
-                  {editingUser ? 'Save User' : 'Create User'}
-                </button>
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
+                {editingUser && editingUser.id !== currentUser.id ? (
+                  <button
+                    type="button"
+                    id="btn-edit-modal-delete-user"
+                    onClick={() => {
+                      const userToDel = editingUser;
+                      setIsAddModalOpen(false);
+                      handleDeleteUser(userToDel);
+                    }}
+                    className="px-3 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Profile</span>
+                  </button>
+                ) : (
+                  <div />
+                )}
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    id="btn-cancel-user-modal"
+                    onClick={() => setIsAddModalOpen(false)}
+                    className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-600 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    id="btn-submit-user-modal"
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-xs font-semibold text-white shadow-xs cursor-pointer"
+                  >
+                    {editingUser ? 'Save User' : 'Create User'}
+                  </button>
+                </div>
               </div>
             </form>
 
@@ -950,11 +1169,13 @@ export const UserManagement: React.FC = () => {
             <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
               <button
                 type="button"
+                id="btn-quick-reset-copy-credentials"
                 onClick={() => {
                   const uid = quickResetUser.userId || quickResetUser.email.split('@')[0];
                   const copyText = `Essential Soul Recruitment Portal Credentials:\nUser ID: ${uid}\nPassword: ${quickNewPassword}\nURL: ${window.location.origin}`;
                   navigator.clipboard.writeText(copyText);
-                  alert('Credentials copied to clipboard!');
+                  setActionToast({ type: 'success', message: 'Credentials copied to clipboard!' });
+                  setTimeout(() => setActionToast(null), 3000);
                 }}
                 className="inline-flex items-center space-x-1 text-slate-600 hover:text-slate-900 text-xs font-medium cursor-pointer"
               >
@@ -965,6 +1186,7 @@ export const UserManagement: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
+                  id="btn-quick-reset-cancel"
                   onClick={() => setQuickResetUser(null)}
                   className="px-3.5 py-1.5 border border-slate-200 hover:bg-white rounded-lg text-xs font-semibold text-slate-600 cursor-pointer"
                 >
@@ -972,22 +1194,104 @@ export const UserManagement: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  id="btn-quick-reset-save"
                   onClick={() => {
                     if (!quickNewPassword.trim()) {
-                      alert('Please enter or generate a new password.');
+                      setActionToast({ type: 'error', message: 'Please enter or generate a new password.' });
+                      setTimeout(() => setActionToast(null), 3000);
                       return;
                     }
                     updateUser(quickResetUser.id, {
                       password: quickNewPassword.trim(),
                       lastPasswordChanged: new Date().toISOString(),
                     });
+                    const userName = quickResetUser.name;
                     setQuickResetUser(null);
+                    setActionToast({ type: 'success', message: `Password for ${userName} updated successfully.` });
+                    setTimeout(() => setActionToast(null), 4000);
                   }}
                   className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-xs cursor-pointer"
                 >
                   Save New Password
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Delete User Confirmation Dialog */}
+      {userToDelete && (
+        <div 
+          id="modal-delete-user-backdrop"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+        >
+          <div 
+            id="modal-delete-user-container"
+            className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in duration-200"
+          >
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 rounded-full bg-rose-100 text-rose-600 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete User Account
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Are you sure you want to permanently remove <span className="font-semibold text-slate-900">{userToDelete.name}</span> from the CRM team?
+                </p>
+
+                <div className="mt-3.5 p-3 bg-slate-50 rounded-lg border border-slate-200/80 text-xs space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Designation / Role:</span>
+                    <span className="font-semibold text-slate-800">{userToDelete.role}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Department:</span>
+                    <span className="font-medium text-slate-700">{userToDelete.department}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Company:</span>
+                    <span className="font-medium text-slate-700">{userToDelete.companyName || 'Essential Soul Lifestyle Pvt Ltd'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">User ID:</span>
+                    <span className="font-mono font-bold text-blue-700">{userToDelete.userId || userToDelete.email.split('@')[0]}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Email:</span>
+                    <span className="font-mono text-slate-600">{userToDelete.email}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2 text-[11px] text-amber-800">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                  <span>
+                    Deleting this user will revoke their credentials and portal login access. Historical interview remarks and audit trail logs remain preserved.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+              <button
+                id="btn-cancel-delete-user"
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                id="btn-confirm-delete-user"
+                type="button"
+                onClick={handleConfirmDeleteUser}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Confirm Delete</span>
+              </button>
             </div>
           </div>
         </div>

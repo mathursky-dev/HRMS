@@ -718,6 +718,41 @@ async function startServer() {
     return res.json({ exists: true, lastModified: stat.mtime });
   });
 
+  // 7. Delete User API
+  app.delete('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      if (supabaseClient) {
+        const { error } = await supabaseClient.from('users').delete().eq('id', id);
+        if (error) {
+          console.warn(`[Supabase] Could not delete user ${id}:`, error.message);
+        }
+      }
+      return res.json({ success: true, message: `User ${id} removed successfully` });
+    } catch (err: any) {
+      console.error(`Error removing user ${id}:`, err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to delete user' });
+    }
+  });
+
+  // 8. Update User Status API (Active / Inactive)
+  app.patch('/api/users/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    try {
+      if (supabaseClient && status) {
+        const { error } = await supabaseClient.from('users').update({ status }).eq('id', id);
+        if (error) {
+          console.warn(`[Supabase] Could not update status for user ${id}:`, error.message);
+        }
+      }
+      return res.json({ success: true, message: `User ${id} status updated to ${status}` });
+    } catch (err: any) {
+      console.error(`Error updating user status for ${id}:`, err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to update user status' });
+    }
+  });
+
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

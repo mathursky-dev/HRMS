@@ -23,6 +23,7 @@ export interface Company {
   email: string;
   phone: string;
   website?: string;
+  logoUrl?: string | null;
   departments: string[];
   isActive: boolean;
   createdAt: string;

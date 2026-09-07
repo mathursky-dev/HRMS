@@ -173,6 +173,7 @@ const STORAGE_KEYS = {
   DAILY_REPORTS: 'esl_crm_daily_reports_v5',
   CURRENT_USER: 'esl_crm_current_user_v5',
   USERS: 'esl_crm_users_v5',
+  DELETED_USERS: 'esl_crm_deleted_users_v5',
   COMPANIES: 'esl_crm_companies_v5',
   ACTIVE_COMPANY: 'esl_crm_active_company_v5',
   DEPARTMENTS: 'esl_crm_departments_v5',
@@ -232,14 +233,20 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // Users state
   const [allUsers, setAllUsers] = useState<UserProfile[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.USERS);
+    const deletedRaw = localStorage.getItem(STORAGE_KEYS.DELETED_USERS);
+    let deletedSet = new Set<string>();
+    try {
+      if (deletedRaw) {
+        deletedSet = new Set(JSON.parse(deletedRaw));
+      }
+    } catch { /* ignore */ }
+
     if (saved) {
       try { 
         const parsed: UserProfile[] = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const existingIds = new Set(parsed.map(u => u.id));
-          const missing = INITIAL_USERS.filter(iu => !existingIds.has(iu.id));
-          const combined = [...parsed, ...missing];
-          return combined.map(u => {
+          const activeUsers = parsed.filter(u => !deletedSet.has(u.id));
+          return activeUsers.map(u => {
             const matchInitial = INITIAL_USERS.find(iu => iu.id === u.id || iu.email === u.email);
             const defaultUserId = matchInitial?.userId || u.email.split('@')[0] || u.name.toLowerCase().replace(/\s+/g, '.');
             const defaultPassword = matchInitial?.password || `${u.name.split(' ')[0]}@2026`;
@@ -252,7 +259,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
       } catch (e) { /* ignore */ }
     }
-    return INITIAL_USERS;
+    return INITIAL_USERS.filter(iu => !deletedSet.has(iu.id));
   });
 
   useEffect(() => {
@@ -386,7 +393,38 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const deleteUser = (id: string) => {
-    setAllUsers(prev => prev.filter(u => u.id !== id));
+    // 1. Filter out from allUsers state and persist immediately
+    setAllUsers(prev => {
+      const updated = prev.filter(u => u.id !== id);
+      try {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
+      } catch (e) { /* ignore */ }
+      return updated;
+    });
+
+    // 2. Track deleted ID to prevent re-hydrating from initial seed
+    try {
+      const deletedRaw = localStorage.getItem(STORAGE_KEYS.DELETED_USERS);
+      const existingDeleted: string[] = deletedRaw ? JSON.parse(deletedRaw) : [];
+      if (!existingDeleted.includes(id)) {
+        const next = [...existingDeleted, id];
+        localStorage.setItem(STORAGE_KEYS.DELETED_USERS, JSON.stringify(next));
+      }
+    } catch (e) { /* ignore */ }
+
+    // 3. If currently logged in user was deleted, switch to first remaining user
+    if (currentUser.id === id) {
+      const fallback = allUsers.find(u => u.id !== id) || INITIAL_USERS[2];
+      setCurrentUserState(fallback);
+      try {
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(fallback));
+      } catch (e) { /* ignore */ }
+    }
+
+    // 4. Send delete request to backend server/Supabase
+    try {
+      fetch(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    } catch (e) { /* ignore */ }
   };
 
   const bulkImportUsers = (

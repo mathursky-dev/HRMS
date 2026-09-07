@@ -735,9 +735,10 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
   const maskedKey = activeKey.length > 8 ? `${activeKey.slice(0, 4)}...${activeKey.slice(-4)}` : '****';
 
   try {
-    const { count, error: tableError } = await client
+    const { data: testData, error: tableError } = await client
       .from('candidates')
-      .select('*', { count: 'exact', head: true });
+      .select('id')
+      .limit(1);
 
     const latencyMs = Date.now() - startTime;
 
@@ -755,11 +756,16 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
       };
     }
 
+    const tableErrMsg = ((tableError.message || '') + ' ' + (tableError.details || '') + ' ' + (tableError.hint || '')).toLowerCase();
     const isMissingTable =
       tableError.code === '42P01' ||
       tableError.code === 'PGRST205' ||
-      tableError.message?.includes('does not exist') ||
-      tableError.message?.includes('relation "public.candidates"');
+      tableError.code === 'PGRST204' ||
+      tableError.code === 'PGRST200' ||
+      tableErrMsg.includes('schema cache') ||
+      tableErrMsg.includes('not find the table') ||
+      tableErrMsg.includes('does not exist') ||
+      tableErrMsg.includes('relation');
 
     if (isMissingTable) {
       return {
@@ -775,7 +781,7 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
       };
     }
 
-    if (tableError.message?.includes('JWT') || tableError.message?.includes('apikey') || tableError.code === 'PGRST301') {
+    if (tableErrMsg.includes('jwt') || tableErrMsg.includes('apikey') || tableErrMsg.includes('unauthorized') || tableError.code === 'PGRST301' || tableError.code === '401') {
       return {
         success: false,
         isConnected: false,
@@ -792,7 +798,7 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
       apiUrl: `${cleanUrl}/rest/v1/`,
       maskedKey,
       latencyMs,
-      message: `Connected to Supabase: ${tableError.message}`,
+      message: `Connected to Supabase: ${tableError.message || tableError.details || 'Connection verified'}`,
     };
   } catch (err: any) {
     return {
@@ -812,7 +818,8 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
   // 1. Try server-side API status (if running fullstack container)
   try {
     const res = await fetch('/api/supabase/status');
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const serverStatus = await res.json();
       if (serverStatus && serverStatus.isConfigured !== undefined) {
         return {
@@ -865,19 +872,24 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
   const maskedKey = anonKey.length > 8 ? `${anonKey.slice(0, 4)}...${anonKey.slice(-4)}` : '****';
 
   try {
-    const { count, error } = await client
+    const { data: testData, error } = await client
       .from('candidates')
-      .select('*', { count: 'exact', head: true });
+      .select('id')
+      .limit(1);
 
     const latency = Date.now() - startTime;
 
     if (error) {
+      const errMsg = ((error.message || '') + ' ' + (error.details || '') + ' ' + (error.hint || '')).toLowerCase();
       const isTableMissing =
         error.code === '42P01' ||
         error.code === 'PGRST205' ||
-        error.message?.includes('relation') ||
-        error.message?.includes('does not exist') ||
-        error.code === 'PGRST200';
+        error.code === 'PGRST204' ||
+        error.code === 'PGRST200' ||
+        errMsg.includes('schema cache') ||
+        errMsg.includes('not find the table') ||
+        errMsg.includes('does not exist') ||
+        errMsg.includes('relation');
 
       if (isTableMissing) {
         return {
@@ -898,22 +910,31 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       }
 
       const isAuthError =
-        error.message?.includes('JWT') ||
-        error.message?.includes('apikey') ||
-        error.code === 'PGRST301';
+        errMsg.includes('jwt') ||
+        errMsg.includes('apikey') ||
+        errMsg.includes('unauthorized') ||
+        error.code === 'PGRST301' ||
+        error.code === '401';
 
       return {
         isConfigured: true,
         isConnected: !isAuthError,
         hasAnonKey: true,
+        hasTablesCreated: false,
         projectId: currentProjId,
         apiUrl: currentApiUrl,
         supabaseUrl: currentUrl,
         maskedKey,
         latencyMs: latency,
-        error: error.message || 'Error querying Supabase API',
+        error: error.message || error.details || 'Error querying Supabase API',
       };
     }
+
+    let candidateCount = testData ? testData.length : 0;
+    try {
+      const { count: exactCount } = await client.from('candidates').select('*', { count: 'exact', head: true });
+      if (exactCount !== null && exactCount !== undefined) candidateCount = exactCount;
+    } catch {}
 
     return {
       isConfigured: true,
@@ -925,9 +946,9 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       supabaseUrl: currentUrl,
       maskedKey,
       latencyMs: latency,
-      candidateCount: count || 0,
+      candidateCount,
       tableStatus: {
-        candidates: { exists: true, count: count || 0 },
+        candidates: { exists: true, count: candidateCount },
       },
     };
   } catch (err: any) {
@@ -972,7 +993,8 @@ export async function syncDatasetToSupabase(payload: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       if (data && data.success !== undefined) {
         return {
@@ -1099,7 +1121,8 @@ export async function fetchDatasetFromSupabase(): Promise<{
   // 1. Try server-side proxy first
   try {
     const res = await fetch('/api/supabase/data');
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const json = await res.json();
       if (json.success && json.data) {
         return { success: true, data: json.data };
@@ -1459,6 +1482,65 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
 );
 
 -- =========================================================================
+-- SAFE SCHEMA UPGRADE: ENSURE ALL COLUMNS EXIST IF TABLES PREVIOUSLY CREATED
+-- =========================================================================
+DO $$
+BEGIN
+  -- Companies
+  ALTER TABLE public.companies ADD COLUMN IF NOT EXISTS admin_password TEXT;
+  ALTER TABLE public.companies ADD COLUMN IF NOT EXISTS admin_user_id TEXT;
+  ALTER TABLE public.companies ADD COLUMN IF NOT EXISTS master_contact_person TEXT;
+  ALTER TABLE public.companies ADD COLUMN IF NOT EXISTS last_password_changed TEXT;
+
+  -- Departments
+  ALTER TABLE public.departments ADD COLUMN IF NOT EXISTS company_id TEXT;
+  ALTER TABLE public.departments ADD COLUMN IF NOT EXISTS head_of_department TEXT;
+  ALTER TABLE public.departments ADD COLUMN IF NOT EXISTS target_hires INTEGER DEFAULT 0;
+  ALTER TABLE public.departments ADD COLUMN IF NOT EXISTS current_employees INTEGER DEFAULT 0;
+
+  -- Users
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS company_id TEXT;
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS company_name TEXT;
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS user_id TEXT;
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS password TEXT;
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS daily_interview_target INTEGER DEFAULT 10;
+  ALTER TABLE public.users ADD COLUMN IF NOT EXISTS monthly_active_joining_target INTEGER DEFAULT 20;
+
+  -- Job Openings
+  ALTER TABLE public.job_openings ADD COLUMN IF NOT EXISTS company_id TEXT;
+
+  -- Offer Letters
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS candidate_id TEXT;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS company_id TEXT;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS annual_ctc NUMERIC DEFAULT 0;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS monthly_gross NUMERIC;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS basic_salary NUMERIC;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS hra NUMERIC;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS special_allowance NUMERIC;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS authorized_signatory_name TEXT;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS authorized_signatory_title TEXT;
+  ALTER TABLE public.offer_letters ADD COLUMN IF NOT EXISTS compensation_breakup JSONB;
+
+  -- Target Settings
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS role TEXT;
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS department TEXT;
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS company_id TEXT;
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS daily_interviews INTEGER DEFAULT 8;
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS monthly_active_joinings INTEGER DEFAULT 15;
+  ALTER TABLE public.target_settings ADD COLUMN IF NOT EXISTS min_calling_per_day INTEGER DEFAULT 60;
+
+  -- Terms Clauses
+  ALTER TABLE public.terms_clauses ADD COLUMN IF NOT EXISTS clause_number TEXT;
+  ALTER TABLE public.terms_clauses ADD COLUMN IF NOT EXISTS is_mandatory_in_offer BOOLEAN DEFAULT true;
+
+  -- Audit Logs
+  ALTER TABLE public.audit_logs ADD COLUMN IF NOT EXISTS entity_id TEXT;
+  ALTER TABLE public.audit_logs ADD COLUMN IF NOT EXISTS entity_type TEXT;
+EXCEPTION WHEN OTHERS THEN
+  -- Ignored if column already exists
+END $$;
+
+-- =========================================================================
 -- CREATE HIGH-PERFORMANCE INDEXES
 -- =========================================================================
 CREATE INDEX IF NOT EXISTS idx_candidates_mobile ON public.candidates(mobile_number);
@@ -1500,4 +1582,7 @@ BEGIN
     EXECUTE format('CREATE POLICY "Allow All CRM Ops" ON public.%I FOR ALL USING (true) WITH CHECK (true);', tbl);
   END LOOP;
 END $$;
+
+-- Reload Supabase PostgREST schema cache immediately
+NOTIFY pgrst, 'reload schema';
 `;

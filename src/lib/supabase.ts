@@ -78,9 +78,22 @@ export function getSupabaseUrl(): string {
 
 export function getSupabaseAnonKey(): string {
   try {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_ANON_KEY) : null;
-    if (saved && saved.trim().length > 0) {
-      return cleanKey(saved);
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(LOCAL_STORAGE_ANON_KEY);
+      if (saved && saved.trim().length > 0) {
+        const cleaned = cleanKey(saved);
+        // Automatically purge any dummy / placeholder fake key
+        if (
+          cleaned &&
+          !cleaned.startsWith('sb_secret_') &&
+          cleaned !== 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m' &&
+          !cleaned.toLowerCase().includes('placeholder')
+        ) {
+          return cleaned;
+        } else {
+          localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+        }
+      }
     }
   } catch {}
 
@@ -91,20 +104,45 @@ export function getSupabaseAnonKey(): string {
     (typeof process !== 'undefined' && process.env?.SUPABASE_ANON_KEY);
 
   if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
-    return cleanKey(envKey);
+    const cleaned = cleanKey(envKey);
+    if (
+      cleaned &&
+      !cleaned.startsWith('sb_secret_') &&
+      cleaned !== 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m'
+    ) {
+      return cleaned;
+    }
   }
 
   return '';
 }
 
 function cleanKey(raw: string): string {
+  if (!raw) return '';
   let clean = raw.trim().replace(/^["']|["']$/g, '').replace(/^[A-Z0-9_]+=\s*/i, '').trim();
-  if (clean.includes(' ')) {
+  if (clean.includes(' ') || clean.includes('\n')) {
     const tokens = clean.split(/\s+/);
     const jwt = tokens.find(t => t.includes('eyJ'));
-    if (jwt) clean = jwt.replace(/^[A-Z0-9_]+=\s*/i, '');
+    if (jwt) clean = jwt.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
+    else clean = tokens[0].replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
+  }
+  // Ignore legacy fake dummy secret
+  if (clean.startsWith('sb_secret_') || clean.includes('sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m')) {
+    return '';
   }
   return clean;
+}
+
+export function clearSupabaseOverrides() {
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(LOCAL_STORAGE_URL_KEY);
+      localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+    }
+    clientInstance = null;
+  } catch (e) {
+    console.error('Failed to clear Supabase overrides', e);
+  }
 }
 
 export const SUPABASE_URL = getSupabaseUrl();
@@ -781,11 +819,25 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
       };
     }
 
-    if (tableErrMsg.includes('jwt') || tableErrMsg.includes('apikey') || tableErrMsg.includes('unauthorized') || tableError.code === 'PGRST301' || tableError.code === '401') {
+    const isAuth =
+      tableErrMsg.includes('jwt') ||
+      tableErrMsg.includes('apikey') ||
+      tableErrMsg.includes('api key') ||
+      tableErrMsg.includes('unregistered') ||
+      tableErrMsg.includes('unauthorized') ||
+      tableErrMsg.includes('invalid api key') ||
+      tableError.code === 'PGRST301' ||
+      tableError.code === '401' ||
+      tableError.code === '403';
+
+    if (isAuth) {
+      const isUnregistered = tableErrMsg.includes('unregistered') || tableErrMsg.includes('invalid api key');
       return {
         success: false,
         isConnected: false,
-        error: `Supabase authentication failed: ${tableError.message}. Please check your anon public key.`,
+        error: isUnregistered
+          ? `Unregistered API key: The provided API key is not registered for Supabase project "${extractProjectId(cleanUrl)}". Please ensure both your Project URL and anon public key match your Supabase project in Project Settings > API.`
+          : `Supabase authentication failed: ${tableError.message}. Please check your anon public key.`,
       };
     }
 
@@ -912,9 +964,15 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       const isAuthError =
         errMsg.includes('jwt') ||
         errMsg.includes('apikey') ||
+        errMsg.includes('api key') ||
+        errMsg.includes('unregistered') ||
         errMsg.includes('unauthorized') ||
+        errMsg.includes('invalid api key') ||
         error.code === 'PGRST301' ||
-        error.code === '401';
+        error.code === '401' ||
+        error.code === '403';
+
+      const isUnregistered = errMsg.includes('unregistered') || errMsg.includes('invalid api key');
 
       return {
         isConfigured: true,
@@ -926,7 +984,10 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
         supabaseUrl: currentUrl,
         maskedKey,
         latencyMs: latency,
-        error: error.message || error.details || 'Error querying Supabase API',
+        errorCode: isUnregistered ? 'UNREGISTERED_API_KEY' : (isAuthError ? 'AUTH_ERROR' : error.code),
+        error: isUnregistered
+          ? `Unregistered API key: The API key provided is not registered for Supabase project "${currentProjId}". Please make sure your Supabase Project URL (${currentUrl}) and Anon API Key are from the same Supabase project.`
+          : (error.message || error.details || 'Error querying Supabase API'),
       };
     }
 

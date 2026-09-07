@@ -8,7 +8,7 @@ const PORT = 3000;
 const CONFIG_FILE = path.join(process.cwd(), '.supabase-config.json');
 
 const DEFAULT_SUPABASE_URL = 'https://snvgarluywefmlsimikf.supabase.co';
-const DEFAULT_SUPABASE_KEY = 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m';
+const DEFAULT_SUPABASE_KEY = '';
 
 function normalizeUrl(input: string): string {
   if (!input) return '';
@@ -43,13 +43,9 @@ function normalizeKey(input: string): string {
   str = str.replace(/^["']|["']$/g, '').trim();
   str = str.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
 
-  // If multiple tokens are pasted together, pick the secret or service_role/anon token
+  // If multiple tokens are pasted together, pick the JWT anon or secret token
   if (str.includes(' ') || str.includes('\n')) {
     const tokens = str.split(/\s+/);
-    const foundSecret = tokens.find(t => t.includes('sb_secret_'));
-    if (foundSecret) {
-      return foundSecret.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
-    }
     const foundJwt = tokens.find(t => t.includes('eyJ'));
     if (foundJwt) {
       return foundJwt.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
@@ -170,23 +166,31 @@ async function testSupabaseConnection(client: SupabaseClient, url: string) {
         error.message?.toLowerCase().includes('not find the table') ||
         error.message?.toLowerCase().includes('does not exist');
 
+      const errMsgLower = (error.message || '').toLowerCase();
       const isUnauthorized =
         error.code === '401' ||
+        error.code === '403' ||
         error.code === 'PGRST301' ||
-        error.message?.toLowerCase().includes('unauthorized') ||
-        error.message?.toLowerCase().includes('jwt') ||
-        error.message?.toLowerCase().includes('apikey');
+        errMsgLower.includes('unauthorized') ||
+        errMsgLower.includes('jwt') ||
+        errMsgLower.includes('apikey') ||
+        errMsgLower.includes('api key') ||
+        errMsgLower.includes('unregistered');
+
+      const isUnregistered = errMsgLower.includes('unregistered');
 
       return {
         isConnected: !isUnauthorized,
         hasTablesCreated: !isTableMissing && !isUnauthorized,
         latencyMs,
-        error: isUnauthorized
+        error: isUnregistered
+          ? `Unregistered API key: The provided Supabase API key is not registered for this project. Please check your Project URL and anon/service key in Supabase Dashboard > Settings > API.`
+          : isUnauthorized
           ? 'Authentication failed: Invalid Supabase API Key or insufficient permissions.'
           : isTableMissing
           ? 'Connected to Supabase! PostgreSQL database tables have not been created yet. Run the SQL schema script in Supabase SQL Editor.'
           : error.message,
-        errorCode: error.code,
+        errorCode: isUnregistered ? 'UNREGISTERED_API_KEY' : error.code,
       };
     }
 

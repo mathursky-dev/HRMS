@@ -40,6 +40,7 @@ import {
   INITIAL_OFFER_LETTERS,
   TODAY 
 } from '../mockData';
+import { fetchDatasetFromSupabase } from '../lib/supabase';
 
 interface RecruitmentContextType {
   // Role-Wise Navigation Permissions
@@ -1373,36 +1374,32 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const refreshFromSupabase = async (): Promise<{ success: boolean; message: string }> => {
     setIsSupabaseSyncing(true);
     try {
-      const res = await fetch('/api/supabase/data');
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
-      const json = await res.json();
-      if (json.success && json.data) {
-        if (Array.isArray(json.data.candidates) && json.data.candidates.length > 0) {
-          setCandidates(json.data.candidates);
+      const res = await fetchDatasetFromSupabase();
+      if (res.success && res.data) {
+        if (Array.isArray(res.data.candidates) && res.data.candidates.length > 0) {
+          setCandidates(res.data.candidates);
         }
-        if (Array.isArray(json.data.followUps) && json.data.followUps.length > 0) {
-          setFollowUps(json.data.followUps);
+        if (Array.isArray(res.data.followUps) && res.data.followUps.length > 0) {
+          setFollowUps(res.data.followUps);
         }
-        if (Array.isArray(json.data.interviews) && json.data.interviews.length > 0) {
-          setInterviews(json.data.interviews);
+        if (Array.isArray(res.data.interviews) && res.data.interviews.length > 0) {
+          setInterviews(res.data.interviews);
         }
-        if (Array.isArray(json.data.companies) && json.data.companies.length > 0) {
-          setCompanies(json.data.companies);
+        if (Array.isArray(res.data.companies) && res.data.companies.length > 0) {
+          setCompanies(res.data.companies);
         }
-        if (Array.isArray(json.data.jobOpenings) && json.data.jobOpenings.length > 0) {
-          setJobOpenings(json.data.jobOpenings);
+        if (Array.isArray(res.data.jobOpenings) && res.data.jobOpenings.length > 0) {
+          setJobOpenings(res.data.jobOpenings);
         }
         return {
           success: true,
-          message: `Loaded ${json.data.candidates?.length || 0} candidates from Supabase!`,
+          message: `Loaded ${res.data.candidates?.length || 0} candidates from Supabase!`,
         };
       }
-      return { success: false, message: json.error || 'No data returned from Supabase' };
+      return { success: false, message: res.error || 'No data returned from Supabase' };
     } catch (err: any) {
       console.warn('Supabase sync warning:', err);
-      return { success: false, message: err.message || 'Error communicating with Supabase' };
+      return { success: false, message: err?.message || 'Error communicating with Supabase' };
     } finally {
       setIsSupabaseSyncing(false);
     }

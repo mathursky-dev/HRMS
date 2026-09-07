@@ -52,66 +52,112 @@ export function extractProjectId(url: string): string {
   }
 }
 
-export const SUPABASE_URL = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL);
-export const SUPABASE_PROJECT_ID = extractProjectId(SUPABASE_URL);
-export const SUPABASE_REST_API = `${SUPABASE_URL}/rest/v1/`;
-
+const LOCAL_STORAGE_URL_KEY = 'esl_supabase_url_override';
 const LOCAL_STORAGE_ANON_KEY = 'esl_supabase_anon_key_override';
 
-export function getSupabaseAnonKey(): string {
-  // Check Vite environment variable first
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
-    let clean = envKey.trim().replace(/^["']|["']$/g, '').replace(/^[A-Z0-9_]+=\s*/i, '').trim();
-    if (clean.includes(' ')) {
-      const tokens = clean.split(/\s+/);
-      const jwt = tokens.find(t => t.includes('eyJ'));
-      if (jwt) clean = jwt.replace(/^[A-Z0-9_]+=\s*/i, '');
-    }
-    return clean;
-  }
-  // Check localStorage fallback if configured
+export function getSupabaseUrl(): string {
   try {
-    const saved = localStorage.getItem(LOCAL_STORAGE_ANON_KEY);
+    const saved = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_URL_KEY) : null;
     if (saved && saved.trim().length > 0) {
-      return saved.trim();
+      return normalizeSupabaseUrl(saved);
     }
-  } catch (e) {
-    // Ignore localStorage access errors
+  } catch {}
+
+  const envUrl = 
+    import.meta.env.VITE_SUPABASE_URL ||
+    (import.meta.env as any).SUPABASE_URL ||
+    (import.meta.env as any).NEXT_PUBLIC_SUPABASE_URL ||
+    (typeof process !== 'undefined' && process.env?.SUPABASE_URL);
+
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    return normalizeSupabaseUrl(envUrl);
   }
+
+  return 'https://snvgarluywefmlsimikf.supabase.co';
+}
+
+export function getSupabaseAnonKey(): string {
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_ANON_KEY) : null;
+    if (saved && saved.trim().length > 0) {
+      return cleanKey(saved);
+    }
+  } catch {}
+
+  const envKey = 
+    import.meta.env.VITE_SUPABASE_ANON_KEY ||
+    (import.meta.env as any).SUPABASE_ANON_KEY ||
+    (import.meta.env as any).NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    (typeof process !== 'undefined' && process.env?.SUPABASE_ANON_KEY);
+
+  if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
+    return cleanKey(envKey);
+  }
+
   return '';
 }
 
-export function setSupabaseAnonKeyOverride(key: string) {
+function cleanKey(raw: string): string {
+  let clean = raw.trim().replace(/^["']|["']$/g, '').replace(/^[A-Z0-9_]+=\s*/i, '').trim();
+  if (clean.includes(' ')) {
+    const tokens = clean.split(/\s+/);
+    const jwt = tokens.find(t => t.includes('eyJ'));
+    if (jwt) clean = jwt.replace(/^[A-Z0-9_]+=\s*/i, '');
+  }
+  return clean;
+}
+
+export const SUPABASE_URL = getSupabaseUrl();
+export const SUPABASE_PROJECT_ID = extractProjectId(SUPABASE_URL);
+export const SUPABASE_REST_API = `${SUPABASE_URL}/rest/v1/`;
+
+export function setSupabaseConfigOverride(url: string, key: string) {
   try {
-    if (key.trim()) {
-      localStorage.setItem(LOCAL_STORAGE_ANON_KEY, key.trim());
-    } else {
-      localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+    if (typeof window !== 'undefined') {
+      if (url && url.trim()) {
+        localStorage.setItem(LOCAL_STORAGE_URL_KEY, url.trim());
+      } else {
+        localStorage.removeItem(LOCAL_STORAGE_URL_KEY);
+      }
+      if (key && key.trim()) {
+        localStorage.setItem(LOCAL_STORAGE_ANON_KEY, key.trim());
+      } else {
+        localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+      }
     }
-    // Invalidate client instance so next call re-instantiates
     clientInstance = null;
   } catch (e) {
-    console.error('Failed to save Supabase key override', e);
+    console.error('Failed to save Supabase config override', e);
   }
 }
 
+export function setSupabaseAnonKeyOverride(key: string) {
+  setSupabaseConfigOverride(getSupabaseUrl(), key);
+}
+
 let clientInstance: SupabaseClient | null = null;
+let lastUsedUrl = '';
+let lastUsedKey = '';
 
 export function getSupabaseClient(): SupabaseClient | null {
+  const currentUrl = getSupabaseUrl();
   const anonKey = getSupabaseAnonKey();
-  if (!anonKey || !SUPABASE_URL || !SUPABASE_URL.startsWith('http')) {
+
+  if (!anonKey || !currentUrl || !currentUrl.startsWith('http')) {
     return null;
   }
 
-  if (!clientInstance) {
+  // Re-instantiate if URL or Key changed
+  if (!clientInstance || currentUrl !== lastUsedUrl || anonKey !== lastUsedKey) {
     try {
-      clientInstance = createClient(SUPABASE_URL, anonKey, {
+      clientInstance = createClient(currentUrl, anonKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
         },
       });
+      lastUsedUrl = currentUrl;
+      lastUsedKey = anonKey;
     } catch (err) {
       console.warn('Error creating Supabase client:', err);
       return null;
@@ -137,6 +183,512 @@ export interface SupabaseHealthResult {
   tableStatus?: Record<string, { exists: boolean; count?: number; error?: string }>;
 }
 
+// =========================================================================
+// BIDIRECTIONAL ENTITY MAPPING (TypeScript CRM <-> PostgreSQL Supabase)
+// =========================================================================
+
+export function candidateToDb(c: any) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    full_name: c.fullName || c.full_name || '',
+    mobile_number: c.mobileNumber || c.mobile_number || '',
+    whatsapp_number: c.whatsappNumber || c.whatsapp_number || c.mobileNumber || '',
+    gender: c.gender || null,
+    age: c.age !== undefined && c.age !== null ? Number(c.age) : null,
+    date_of_birth: c.dateOfBirth || c.date_of_birth || null,
+    email: c.email || null,
+    city: c.city || null,
+    area: c.area || null,
+    address: c.address || null,
+    position_applied: c.positionApplied || c.position_applied || '',
+    department: c.department || 'HR Recruitment',
+    company_id: c.companyId || c.company_id || null,
+    company_name: c.companyName || c.company_name || null,
+    qualification: c.qualification || null,
+    total_experience: c.totalExperience || c.total_experience || null,
+    relevant_experience: c.relevantExperience || c.relevant_experience || null,
+    current_company: c.currentCompany || c.current_company || null,
+    current_salary: c.currentSalary !== undefined && c.currentSalary !== null ? Number(c.currentSalary) : null,
+    expected_salary: c.expectedSalary !== undefined && c.expectedSalary !== null ? Number(c.expectedSalary) : null,
+    salary_offered: c.salaryOffered !== undefined && c.salaryOffered !== null ? Number(c.salaryOffered) : null,
+    notice_period: c.noticePeriod || c.notice_period || null,
+    preferred_location: c.preferredLocation || c.preferred_location || null,
+    candidate_source: c.candidateSource || c.candidate_source || 'Indeed',
+    assigned_hr: c.assignedHr || c.assigned_hr || 'Nandani',
+    remarks: c.remarks || null,
+    status: c.status || 'New Lead',
+    is_active_joining: Boolean(c.isActiveJoining ?? c.is_active_joining),
+    active_joining_date: c.activeJoinedDate || c.active_joining_date || null,
+    joining_date: c.joiningDate || c.joining_date || null,
+    interview_date: c.interviewDate || c.interview_date || null,
+    offer_letter_issued: Boolean(c.offerLetterIssued ?? c.offer_letter_issued),
+    is_locked: Boolean(c.isLocked ?? c.is_locked),
+    locked_by: c.lockedBy || c.locked_by || null,
+    locked_at: c.lockedAt || c.locked_at || null,
+    first_call_date: c.firstCallDate || c.first_call_date || null,
+    last_activity_date: c.lastActivityDate || c.last_activity_date || new Date().toISOString(),
+    created_at: c.createdAt || c.created_at || new Date().toISOString(),
+    updated_at: c.updatedAt || c.updated_at || new Date().toISOString(),
+  };
+}
+
+export function candidateFromDb(r: any): Candidate {
+  return {
+    id: r.id,
+    fullName: r.full_name || r.fullName || '',
+    mobileNumber: r.mobile_number || r.mobileNumber || '',
+    whatsappNumber: r.whatsapp_number || r.whatsappNumber || r.mobile_number || '',
+    gender: r.gender || 'Male',
+    age: r.age !== null && r.age !== undefined ? Number(r.age) : undefined,
+    dateOfBirth: r.date_of_birth || r.dateOfBirth || undefined,
+    email: r.email || '',
+    city: r.city || '',
+    area: r.area || '',
+    address: r.address || undefined,
+    positionApplied: r.position_applied || r.positionApplied || '',
+    department: r.department || 'HR Recruitment',
+    companyId: r.company_id || r.companyId || undefined,
+    companyName: r.company_name || r.companyName || undefined,
+    qualification: r.qualification || '',
+    totalExperience: r.total_experience || r.totalExperience || '',
+    relevantExperience: r.relevant_experience || r.relevantExperience || '',
+    currentCompany: r.current_company || r.currentCompany || undefined,
+    currentSalary: r.current_salary !== null && r.current_salary !== undefined ? Number(r.current_salary) : (r.currentSalary ?? undefined),
+    expectedSalary: r.expected_salary !== null && r.expected_salary !== undefined ? Number(r.expected_salary) : (r.expectedSalary ?? undefined),
+    salaryOffered: r.salary_offered !== null && r.salary_offered !== undefined ? Number(r.salary_offered) : (r.salaryOffered ?? undefined),
+    noticePeriod: r.notice_period || r.noticePeriod || undefined,
+    preferredLocation: r.preferred_location || r.preferredLocation || undefined,
+    candidateSource: r.candidate_source || r.candidateSource || 'Indeed',
+    assignedHr: r.assigned_hr || r.assignedHr || 'Nandani',
+    remarks: r.remarks || undefined,
+    status: r.status || 'New Lead',
+    isActiveJoining: Boolean(r.is_active_joining ?? r.isActiveJoining),
+    activeJoinedDate: r.active_joining_date || r.activeJoinedDate || undefined,
+    joiningDate: r.joining_date || r.joiningDate || undefined,
+    selectionDate: r.interview_date || r.selection_date || r.selectionDate || undefined,
+    isArchived: Boolean(r.is_archived ?? r.isArchived),
+    firstCallDate: r.first_call_date || r.firstCallDate || undefined,
+    lastActivityDate: r.last_activity_date || r.lastActivityDate || new Date().toISOString(),
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function companyToDb(c: any) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    name: c.name || '',
+    code: c.code || '',
+    legal_name: c.legalName || c.legal_name || null,
+    cin: c.cin || null,
+    gstin: c.gstin || null,
+    address: c.address || '',
+    city: c.city || '',
+    state: c.state || '',
+    pincode: c.pincode || null,
+    phone: c.phone || '',
+    email: c.email || '',
+    logo_url: c.logoUrl || c.logo_url || null,
+    website: c.website || null,
+    departments: Array.isArray(c.departments) ? c.departments : [],
+    is_active: Boolean(c.isActive ?? c.is_active ?? true),
+    admin_user_id: c.adminUserId || c.admin_user_id || null,
+    admin_password: c.adminPassword || c.admin_password || null,
+    master_contact_person: c.masterContactPerson || c.master_contact_person || null,
+    last_password_changed: c.lastPasswordChanged || c.last_password_changed || null,
+    created_at: c.createdAt || c.created_at || new Date().toISOString(),
+    updated_at: c.updatedAt || c.updated_at || new Date().toISOString(),
+  };
+}
+
+export function companyFromDb(r: any): Company {
+  return {
+    id: r.id,
+    name: r.name || '',
+    code: r.code || '',
+    legalName: r.legal_name || r.legalName || undefined,
+    cin: r.cin || undefined,
+    gstin: r.gstin || undefined,
+    address: r.address || '',
+    city: r.city || '',
+    state: r.state || '',
+    pincode: r.pincode || undefined,
+    phone: r.phone || '',
+    email: r.email || '',
+    website: r.website || undefined,
+    logoUrl: r.logo_url || r.logoUrl || null,
+    departments: Array.isArray(r.departments) ? r.departments : [],
+    isActive: Boolean(r.is_active ?? r.isActive ?? true),
+    adminUserId: r.admin_user_id || r.adminUserId || undefined,
+    adminPassword: r.admin_password || r.adminPassword || undefined,
+    masterContactPerson: r.master_contact_person || r.masterContactPerson || undefined,
+    lastPasswordChanged: r.last_password_changed || r.lastPasswordChanged || undefined,
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function departmentToDb(d: any, validCompanyIds?: Set<string>) {
+  if (!d) return null;
+  const compId = d.companyId || d.company_id || null;
+  return {
+    id: d.id,
+    name: d.name || '',
+    code: d.code || '',
+    description: d.description || null,
+    company_id: (validCompanyIds && compId && !validCompanyIds.has(compId)) ? null : compId,
+    head_of_department: d.headName || d.head_of_department || null,
+    target_hires: d.targetHires ?? d.target_hires ?? d.dailyInterviewTarget ?? 0,
+    current_employees: d.currentEmployees ?? d.current_employees ?? 0,
+    is_active: Boolean(d.isActive ?? d.is_active ?? true),
+    created_at: d.createdAt || d.created_at || new Date().toISOString(),
+  };
+}
+
+export function departmentFromDb(r: any): DepartmentItem {
+  return {
+    id: r.id,
+    name: r.name || '',
+    code: r.code || '',
+    companyId: r.company_id || r.companyId || '',
+    companyName: r.company_name || r.companyName || '',
+    headName: r.head_of_department || r.headName || '',
+    headEmail: r.head_email || r.headEmail || undefined,
+    dailyInterviewTarget: r.target_hires ?? r.dailyInterviewTarget ?? 5,
+    monthlyActiveJoiningTarget: r.current_employees ?? r.monthlyActiveJoiningTarget ?? 10,
+    description: r.description || undefined,
+    isActive: Boolean(r.is_active ?? r.isActive ?? true),
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function userToDb(u: any, validCompanyIds?: Set<string>) {
+  if (!u) return null;
+  const compId = u.companyId || u.company_id || null;
+  return {
+    id: u.id,
+    name: u.name || '',
+    email: u.email || '',
+    phone: u.phone || null,
+    role: u.role || 'HR Executive',
+    department: u.department || 'HR Recruitment',
+    company_id: (validCompanyIds && compId && !validCompanyIds.has(compId)) ? null : compId,
+    company_name: u.companyName || u.company_name || null,
+    user_id: u.userId || u.user_id || null,
+    password: u.password || null,
+    daily_interview_target: u.dailyInterviewTarget ?? u.daily_interview_target ?? 10,
+    monthly_active_joining_target: u.monthlyActiveJoiningTarget ?? u.monthly_active_joining_target ?? 20,
+    status: u.status || 'Active',
+    avatar_url: u.avatar || u.avatar_url || null,
+    created_at: u.createdAt || u.created_at || new Date().toISOString(),
+    updated_at: u.updatedAt || u.updated_at || new Date().toISOString(),
+  };
+}
+
+export function userFromDb(r: any): UserProfile {
+  return {
+    id: r.id,
+    name: r.name || '',
+    email: r.email || '',
+    phone: r.phone || undefined,
+    role: r.role || 'HR Executive',
+    department: r.department || 'HR Recruitment',
+    companyId: r.company_id || r.companyId || undefined,
+    companyName: r.company_name || r.companyName || undefined,
+    userId: r.user_id || r.userId || undefined,
+    password: r.password || undefined,
+    dailyInterviewTarget: r.daily_interview_target ?? r.dailyInterviewTarget ?? 10,
+    monthlyActiveJoiningTarget: r.monthly_active_joining_target ?? r.monthlyActiveJoiningTarget ?? 20,
+    status: r.status || 'Active',
+    avatar: r.avatar_url || r.avatar || undefined,
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function jobOpeningToDb(j: any, validCompanyIds?: Set<string>) {
+  if (!j) return null;
+  const compId = j.companyId || j.company_id || null;
+  return {
+    id: j.id,
+    title: j.jobTitle || j.title || 'Recruitment Opening',
+    department: j.department || 'HR Recruitment',
+    company_id: (validCompanyIds && compId && !validCompanyIds.has(compId)) ? null : compId,
+    positions: j.vacancies ?? j.positions ?? 1,
+    experience_min: j.experienceMin ?? j.experience_min ?? 0,
+    experience_max: j.experienceMax ?? j.experience_max ?? 5,
+    salary_min: j.salaryMin ?? j.salary_min ?? null,
+    salary_max: j.salaryMax ?? j.salary_max ?? null,
+    location: j.jobLocation || j.location || 'Head Office',
+    job_type: j.jobType || j.job_type || 'Full-Time',
+    description: j.description || `Job opening for ${j.jobTitle || j.title || 'role'}`,
+    requirements: j.requirements || j.experience || null,
+    status: j.status === 'Open' || j.status === 'Urgent' ? 'Active' : (j.status || 'Active'),
+    posted_date: j.postedDate || j.posted_date || new Date().toISOString().split('T')[0],
+    closing_date: j.hiringDeadline || j.closing_date || null,
+    created_at: j.createdAt || j.created_at || new Date().toISOString(),
+  };
+}
+
+export function jobOpeningFromDb(r: any): JobOpening {
+  return {
+    id: r.id,
+    jobTitle: r.title || r.jobTitle || '',
+    department: r.department || 'HR Recruitment',
+    vacancies: r.positions ?? r.vacancies ?? 1,
+    filledPositions: r.filled_positions ?? r.filledPositions ?? 0,
+    salaryRange: r.salary_min ? `₹${r.salary_min} - ₹${r.salary_max || r.salary_min}` : (r.salaryRange || 'As per industry'),
+    jobLocation: r.location || r.jobLocation || '',
+    experience: r.requirements || `${r.experience_min || 0}-${r.experience_max || 5} yrs`,
+    hrResponsible: r.hr_responsible || r.hrResponsible || 'Nandani',
+    hiringDeadline: r.closing_date || r.hiringDeadline || '',
+    status: r.status || 'Open',
+  };
+}
+
+export function interviewToDb(i: any, validCandidateIds?: Set<string>) {
+  if (!i) return null;
+  const candId = i.candidateId || i.candidate_id || null;
+  if (validCandidateIds && candId && !validCandidateIds.has(candId)) {
+    return null;
+  }
+  return {
+    id: i.id,
+    candidate_id: candId,
+    candidate_name: i.candidateName || i.candidate_name || '',
+    candidate_phone: i.candidateMobile || i.candidate_phone || '',
+    candidate_role: i.position || i.candidate_role || '',
+    scheduled_date: i.interviewDate || i.scheduled_date || new Date().toISOString().split('T')[0],
+    scheduled_time: i.interviewTime || i.scheduled_time || '11:00',
+    round: i.round || 'Round 1 (HR Screening)',
+    interviewer_name: i.interviewer || i.interviewer_name || 'Vikram Singh',
+    interviewer_role: i.interviewerRole || i.interviewer_role || 'Interviewer',
+    status: i.attendanceStatus || i.status || 'Scheduled',
+    attendance_status: i.attendanceStatus || i.attendance_status || 'Scheduled',
+    evaluation: i.evaluation || null,
+    notes: i.remarks || i.notes || '',
+    created_at: i.createdAt || i.created_at || new Date().toISOString(),
+  };
+}
+
+export function interviewFromDb(r: any): InterviewRecord {
+  return {
+    id: r.id,
+    candidateId: r.candidate_id || r.candidateId || '',
+    candidateName: r.candidate_name || r.candidateName || '',
+    candidateMobile: r.candidate_phone || r.candidateMobile || '',
+    position: r.candidate_role || r.position || '',
+    department: r.department || 'HR Recruitment',
+    hrExecutive: r.conducted_by || r.hrExecutive || 'Nandani',
+    interviewer: r.interviewer_name || r.interviewer || 'Vikram Singh',
+    interviewDate: r.scheduled_date || r.interviewDate || new Date().toISOString().split('T')[0],
+    interviewTime: r.scheduled_time || r.interviewTime || '11:00',
+    interviewMode: r.mode || r.interviewMode || 'Office Interview',
+    interviewLocation: r.location || r.interviewLocation || 'Main Office',
+    attendanceStatus: r.attendance_status || r.attendanceStatus || 'Scheduled',
+    reminderSent: Boolean(r.reminder_sent ?? r.reminderSent),
+    remarks: r.notes || r.remarks || undefined,
+    evaluation: r.evaluation || undefined,
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function followUpToDb(f: any, validCandidateIds?: Set<string>) {
+  if (!f) return null;
+  const candId = f.candidateId || f.candidate_id || null;
+  if (validCandidateIds && candId && !validCandidateIds.has(candId)) {
+    return null;
+  }
+  return {
+    id: f.id,
+    candidate_id: candId,
+    scheduled_date: f.followUpDate || f.scheduled_date || new Date().toISOString().split('T')[0],
+    scheduled_time: f.followUpTime || f.scheduled_time || '11:00',
+    type: f.followUpMode || f.type || 'Call',
+    notes: f.candidateResponse || f.notes || '',
+    completed: Boolean(f.isCompleted ?? f.completed),
+    completed_date: f.completedDate || f.completed_date || null,
+    conducted_by: f.hrExecutive || f.conducted_by || 'Nandani',
+    outcome: f.resultingStatus || f.outcome || 'Follow-up',
+    next_follow_up_date: f.nextFollowUpDate || f.next_follow_up_date || null,
+    created_at: f.createdAt || f.created_at || new Date().toISOString(),
+  };
+}
+
+export function followUpFromDb(r: any): FollowUpRecord {
+  return {
+    id: r.id,
+    candidateId: r.candidate_id || r.candidateId || '',
+    candidateName: r.candidate_name || r.candidateName || '',
+    candidateMobile: r.candidate_phone || r.candidateMobile || '',
+    position: r.position || '',
+    hrExecutive: r.conducted_by || r.hrExecutive || 'Nandani',
+    followUpDate: r.scheduled_date || r.followUpDate || new Date().toISOString().split('T')[0],
+    followUpTime: r.scheduled_time || r.followUpTime || '11:00',
+    followUpMode: r.type || r.followUpMode || 'Call',
+    candidateResponse: r.notes || r.candidateResponse || '',
+    notes: r.notes || '',
+    nextFollowUpDate: r.next_follow_up_date || r.nextFollowUpDate || undefined,
+    resultingStatus: r.outcome || r.resultingStatus || 'Follow-up',
+    isCompleted: Boolean(r.completed ?? r.isCompleted),
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+  };
+}
+
+export function offerLetterToDb(o: any, validCandidateIds?: Set<string>, validCompanyIds?: Set<string>) {
+  if (!o) return null;
+  const candId = o.candidateId || o.candidate_id || null;
+  const compId = o.companyId || o.company_id || null;
+  return {
+    id: o.id,
+    candidate_id: (validCandidateIds && candId && !validCandidateIds.has(candId)) ? null : candId,
+    candidate_name: o.candidateName || o.candidate_name || '',
+    candidate_email: o.candidateEmail || o.candidate_email || '',
+    candidate_phone: o.candidatePhone || o.candidate_phone || '',
+    company_id: (validCompanyIds && compId && !validCompanyIds.has(compId)) ? null : compId,
+    company_name: o.companyName || o.company_name || '',
+    department: o.department || '',
+    designation: o.designation || 'Staff',
+    annual_ctc: o.annualCtc !== undefined && o.annualCtc !== null ? Number(o.annualCtc) : (o.annual_ctc ? Number(o.annual_ctc) : 0),
+    monthly_gross: o.monthlyGross !== undefined && o.monthlyGross !== null ? Number(o.monthlyGross) : (o.monthly_gross ? Number(o.monthly_gross) : null),
+    basic_salary: o.basicSalary !== undefined && o.basicSalary !== null ? Number(o.basicSalary) : null,
+    hra: o.hra !== undefined && o.hra !== null ? Number(o.hra) : null,
+    special_allowance: o.specialAllowance !== undefined && o.specialAllowance !== null ? Number(o.specialAllowance) : null,
+    joining_date: o.joiningDate || o.joining_date || null,
+    status: o.status || 'Draft',
+    offer_date: o.offerDate || o.offer_date || new Date().toISOString().split('T')[0],
+    validity_date: o.validityDate || o.validity_date || null,
+    authorized_signatory_name: o.authorizedSignatoryName || o.authorized_signatory_name || 'HR Director',
+    authorized_signatory_title: o.authorizedSignatoryTitle || o.authorized_signatory_title || 'Director',
+    compensation_breakup: o.compensationBreakup || o.compensation_breakup || null,
+    created_at: o.createdAt || o.created_at || new Date().toISOString(),
+    updated_at: o.updatedAt || o.updated_at || new Date().toISOString(),
+  };
+}
+
+export function offerLetterFromDb(r: any): OfferLetter {
+  return {
+    id: r.id,
+    candidateId: r.candidate_id || r.candidateId || undefined,
+    candidateName: r.candidate_name || r.candidateName || '',
+    candidateEmail: r.candidate_email || r.candidateEmail || '',
+    candidatePhone: r.candidate_phone || r.candidatePhone || '',
+    companyId: r.company_id || r.companyId || '',
+    companyName: r.company_name || r.companyName || '',
+    companyAddress: r.company_address || r.companyAddress || '',
+    department: r.department || '',
+    designation: r.designation || '',
+    employmentType: r.employment_type || r.employmentType || 'Full-Time',
+    workLocation: r.work_location || r.workLocation || '',
+    reportingManager: r.reporting_manager || r.reportingManager || '',
+    offerDate: r.offer_date || r.offerDate || new Date().toISOString().split('T')[0],
+    joiningDate: r.joining_date || r.joiningDate || '',
+    validityDate: r.validity_date || r.validityDate || '',
+    annualCtc: Number(r.annual_ctc || r.annualCtc || 0),
+    monthlyGross: Number(r.monthly_gross || r.monthlyGross || 0),
+    basicSalary: Number(r.basic_salary || r.basicSalary || 0),
+    hra: Number(r.hra || 0),
+    specialAllowance: Number(r.special_allowance || r.specialAllowance || 0),
+    monthlyInHand: Number(r.monthly_in_hand || r.monthlyInHand || r.monthly_gross || 0),
+    probationMonths: Number(r.probation_months || r.probationMonths || 3),
+    noticePeriodDays: Number(r.notice_period_days || r.noticePeriodDays || 30),
+    status: r.status || 'Draft',
+    authorizedSignatoryName: r.authorized_signatory_name || r.authorizedSignatoryName || 'HR Director',
+    authorizedSignatoryTitle: r.authorized_signatory_title || r.authorizedSignatoryTitle || 'Director',
+    compensationBreakup: r.compensation_breakup || r.compensationBreakup || undefined,
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+    updatedAt: r.updated_at || r.updatedAt || new Date().toISOString(),
+  };
+}
+
+export function targetSettingToDb(t: any) {
+  if (!t) return null;
+  return {
+    id: t.id,
+    role: t.targetEntityName || t.role || t.metric || 'HR Executive',
+    department: t.department || 'HR Recruitment',
+    company_id: t.companyId || t.company_id || null,
+    daily_interviews: t.targetValue !== undefined ? Number(t.targetValue) : (t.daily_interviews ?? 8),
+    monthly_active_joinings: t.minimumBenchmark !== undefined ? Number(t.minimumBenchmark) : (t.monthly_active_joinings ?? 15),
+    min_calling_per_day: t.minCallingPerDay !== undefined ? Number(t.minCallingPerDay) : (t.min_calling_per_day ?? 60),
+    updated_at: t.updatedAt || t.updated_at || new Date().toISOString(),
+  };
+}
+
+export function targetSettingFromDb(r: any): TargetSetting {
+  return {
+    id: r.id,
+    targetType: r.target_type || r.targetType || 'HR Executive',
+    targetEntityId: r.company_id || r.targetEntityId || r.id,
+    targetEntityName: r.role || r.targetEntityName || 'Target Benchmark',
+    period: r.period || 'Daily',
+    metric: r.metric || 'Interviews Conducted',
+    targetValue: r.daily_interviews ?? r.targetValue ?? 8,
+    minimumBenchmark: r.monthly_active_joinings ?? r.minimumBenchmark ?? 15,
+    updatedAt: r.updated_at || r.updatedAt || new Date().toISOString(),
+    updatedBy: r.updated_by || r.updatedBy || 'Admin',
+  };
+}
+
+export function termsClauseToDb(tc: any) {
+  if (!tc) return null;
+  return {
+    id: tc.id,
+    clause_number: tc.clauseNumber || tc.clause_number || '1',
+    category: tc.category || 'Code of Conduct',
+    title: tc.title || '',
+    content: tc.content || '',
+    is_mandatory_in_offer: Boolean(tc.isMandatoryInOffer ?? tc.is_mandatory_in_offer ?? true),
+    is_active: Boolean(tc.isActive ?? tc.is_active ?? true),
+    updated_at: tc.updatedAt || tc.updated_at || new Date().toISOString(),
+  };
+}
+
+export function termsClauseFromDb(r: any): TermsClause {
+  return {
+    id: r.id,
+    clauseNumber: r.clause_number || r.clauseNumber || '1',
+    category: r.category || 'Code of Conduct',
+    title: r.title || '',
+    content: r.content || '',
+    isMandatoryInOffer: Boolean(r.is_mandatory_in_offer ?? r.isMandatoryInOffer ?? true),
+    isActive: Boolean(r.is_active ?? r.isActive ?? true),
+    updatedAt: r.updated_at || r.updatedAt || new Date().toISOString(),
+    updatedBy: r.updated_by || r.updatedBy || 'Admin',
+  };
+}
+
+export function auditLogToDb(a: any) {
+  if (!a) return null;
+  return {
+    id: a.id,
+    timestamp: a.timestamp || new Date().toISOString(),
+    user_id: a.performedBy || a.user_id || 'System',
+    user_name: a.performedBy || a.user_name || 'System Admin',
+    user_role: a.userRole || a.user_role || 'Admin',
+    action: a.action || 'Updated',
+    entity_type: a.entityType || a.entity_type || 'Candidate',
+    entity_id: a.candidateId || a.entity_id || '',
+    details: a.details || a.candidateName || null,
+    ip_address: a.ipAddress || a.ip_address || '127.0.0.1',
+  };
+}
+
+export function auditLogFromDb(r: any): AuditLogEntry {
+  return {
+    id: r.id,
+    candidateId: r.entity_id || r.candidateId || '',
+    candidateName: r.details || r.candidateName || 'Candidate',
+    action: r.action || 'Created',
+    performedBy: r.user_name || r.performedBy || 'System',
+    timestamp: r.timestamp || new Date().toISOString(),
+    details: r.details || undefined,
+  };
+}
+
+// =========================================================================
+// CONFIGURATION & HEALTH CHECKS
+// =========================================================================
+
 export async function updateSupabaseServerConfig(url: string, key: string): Promise<{
   success: boolean;
   isConnected: boolean;
@@ -149,59 +701,151 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
   message?: string;
   error?: string;
 }> {
+  // Always save in browser localStorage first so Vercel client operations persist credentials!
+  setSupabaseConfigOverride(url, key);
+
+  // 1. Try server-side config update (for container / Express setups)
   try {
     const res = await fetch('/api/supabase/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, key }),
     });
-    return await res.json();
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch {
+    // Expected on Vercel (static deployment)
+  }
+
+  // 2. Direct browser test on Vercel
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      success: false,
+      isConnected: false,
+      error: 'Please provide a valid Supabase Project URL and API Key.',
+    };
+  }
+
+  const startTime = Date.now();
+  const cleanUrl = getSupabaseUrl();
+  const activeKey = getSupabaseAnonKey();
+  const maskedKey = activeKey.length > 8 ? `${activeKey.slice(0, 4)}...${activeKey.slice(-4)}` : '****';
+
+  try {
+    const { count, error: tableError } = await client
+      .from('candidates')
+      .select('*', { count: 'exact', head: true });
+
+    const latencyMs = Date.now() - startTime;
+
+    if (!tableError) {
+      return {
+        success: true,
+        isConnected: true,
+        hasTablesCreated: true,
+        projectId: extractProjectId(cleanUrl),
+        supabaseUrl: cleanUrl,
+        apiUrl: `${cleanUrl}/rest/v1/`,
+        maskedKey,
+        latencyMs,
+        message: `Connected to Supabase! PostgreSQL database tables are active and ready for sync (latency: ${latencyMs}ms).`,
+      };
+    }
+
+    const isMissingTable =
+      tableError.code === '42P01' ||
+      tableError.code === 'PGRST205' ||
+      tableError.message?.includes('does not exist') ||
+      tableError.message?.includes('relation "public.candidates"');
+
+    if (isMissingTable) {
+      return {
+        success: true,
+        isConnected: true,
+        hasTablesCreated: false,
+        projectId: extractProjectId(cleanUrl),
+        supabaseUrl: cleanUrl,
+        apiUrl: `${cleanUrl}/rest/v1/`,
+        maskedKey,
+        latencyMs,
+        message: 'Connected to Supabase REST API! (Database online · Next step: create tables using the SQL Schema script in Supabase SQL Editor).',
+      };
+    }
+
+    if (tableError.message?.includes('JWT') || tableError.message?.includes('apikey') || tableError.code === 'PGRST301') {
+      return {
+        success: false,
+        isConnected: false,
+        error: `Supabase authentication failed: ${tableError.message}. Please check your anon public key.`,
+      };
+    }
+
+    return {
+      success: true,
+      isConnected: true,
+      hasTablesCreated: false,
+      projectId: extractProjectId(cleanUrl),
+      supabaseUrl: cleanUrl,
+      apiUrl: `${cleanUrl}/rest/v1/`,
+      maskedKey,
+      latencyMs,
+      message: `Connected to Supabase: ${tableError.message}`,
+    };
   } catch (err: any) {
     return {
       success: false,
       isConnected: false,
-      error: err?.message || 'Failed to connect to backend server',
+      error: err?.message || 'Network error connecting to Supabase from browser',
     };
   }
 }
 
 export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
   const startTime = Date.now();
+  const currentUrl = getSupabaseUrl();
+  const currentProjId = extractProjectId(currentUrl);
+  const currentApiUrl = `${currentUrl}/rest/v1/`;
 
-  // 1. Try server-side API proxy first (using backend authenticated secret key)
+  // 1. Try server-side API status (if running fullstack container)
   try {
     const res = await fetch('/api/supabase/status');
     if (res.ok) {
       const serverStatus = await res.json();
-      return {
-        isConfigured: serverStatus.isConfigured,
-        isConnected: serverStatus.isConnected,
-        hasAnonKey: true,
-        hasTablesCreated: serverStatus.hasTablesCreated,
-        projectId: serverStatus.projectId || SUPABASE_PROJECT_ID,
-        apiUrl: serverStatus.apiUrl || SUPABASE_REST_API,
-        supabaseUrl: serverStatus.supabaseUrl || SUPABASE_URL,
-        maskedKey: serverStatus.maskedKey,
-        latencyMs: serverStatus.latencyMs ?? (Date.now() - startTime),
-        error: serverStatus.error,
-        errorCode: serverStatus.errorCode,
-        candidateCount: serverStatus.candidateCount,
-      };
+      if (serverStatus && serverStatus.isConfigured !== undefined) {
+        return {
+          isConfigured: serverStatus.isConfigured,
+          isConnected: serverStatus.isConnected,
+          hasAnonKey: true,
+          hasTablesCreated: serverStatus.hasTablesCreated,
+          projectId: serverStatus.projectId || currentProjId,
+          apiUrl: serverStatus.apiUrl || currentApiUrl,
+          supabaseUrl: serverStatus.supabaseUrl || currentUrl,
+          maskedKey: serverStatus.maskedKey,
+          latencyMs: serverStatus.latencyMs ?? (Date.now() - startTime),
+          error: serverStatus.error,
+          errorCode: serverStatus.errorCode,
+          candidateCount: serverStatus.candidateCount,
+        };
+      }
     }
   } catch {
-    // Fall back to direct client check
+    // Expected on Vercel static deployment
   }
 
+  // 2. Direct browser check
   const anonKey = getSupabaseAnonKey();
-
   if (!anonKey) {
     return {
       isConfigured: false,
       isConnected: false,
       hasAnonKey: false,
-      projectId: SUPABASE_PROJECT_ID,
-      apiUrl: SUPABASE_REST_API,
-      error: 'Supabase API is configured on server. For direct browser connection, configure VITE_SUPABASE_ANON_KEY.',
+      projectId: currentProjId,
+      apiUrl: currentApiUrl,
+      supabaseUrl: currentUrl,
+      error: 'Supabase API Key is not configured. Please enter your project anon key.',
     };
   }
 
@@ -211,14 +855,16 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       isConfigured: false,
       isConnected: false,
       hasAnonKey: true,
-      projectId: SUPABASE_PROJECT_ID,
-      apiUrl: SUPABASE_REST_API,
-      error: 'Failed to initialize Supabase client instance',
+      projectId: currentProjId,
+      apiUrl: currentApiUrl,
+      supabaseUrl: currentUrl,
+      error: 'Failed to initialize Supabase client instance in browser.',
     };
   }
 
+  const maskedKey = anonKey.length > 8 ? `${anonKey.slice(0, 4)}...${anonKey.slice(-4)}` : '****';
+
   try {
-    // Probe candidates or companies table
     const { count, error } = await client
       .from('candidates')
       .select('*', { count: 'exact', head: true });
@@ -226,7 +872,6 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
     const latency = Date.now() - startTime;
 
     if (error) {
-      // If table does not exist (relation does not exist code 42P01 or PGRST200 or PGRST205)
       const isTableMissing =
         error.code === '42P01' ||
         error.code === 'PGRST205' ||
@@ -240,8 +885,10 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
           isConnected: true,
           hasAnonKey: true,
           hasTablesCreated: false,
-          projectId: SUPABASE_PROJECT_ID,
-          apiUrl: SUPABASE_REST_API,
+          projectId: currentProjId,
+          apiUrl: currentApiUrl,
+          supabaseUrl: currentUrl,
+          maskedKey,
           latencyMs: latency,
           error: 'Connected to Supabase! The database tables have not been created yet in PostgreSQL. Please run the SQL schema script in Supabase SQL Editor.',
           tableStatus: {
@@ -250,12 +897,19 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
         };
       }
 
+      const isAuthError =
+        error.message?.includes('JWT') ||
+        error.message?.includes('apikey') ||
+        error.code === 'PGRST301';
+
       return {
         isConfigured: true,
-        isConnected: false,
+        isConnected: !isAuthError,
         hasAnonKey: true,
-        projectId: SUPABASE_PROJECT_ID,
-        apiUrl: SUPABASE_REST_API,
+        projectId: currentProjId,
+        apiUrl: currentApiUrl,
+        supabaseUrl: currentUrl,
+        maskedKey,
         latencyMs: latency,
         error: error.message || 'Error querying Supabase API',
       };
@@ -266,8 +920,10 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       isConnected: true,
       hasAnonKey: true,
       hasTablesCreated: true,
-      projectId: SUPABASE_PROJECT_ID,
-      apiUrl: SUPABASE_REST_API,
+      projectId: currentProjId,
+      apiUrl: currentApiUrl,
+      supabaseUrl: currentUrl,
+      maskedKey,
       latencyMs: latency,
       candidateCount: count || 0,
       tableStatus: {
@@ -279,16 +935,19 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       isConfigured: true,
       isConnected: false,
       hasAnonKey: true,
-      projectId: SUPABASE_PROJECT_ID,
-      apiUrl: SUPABASE_REST_API,
-      error: err?.message || 'Network error connecting to Supabase',
+      projectId: currentProjId,
+      apiUrl: currentApiUrl,
+      supabaseUrl: currentUrl,
+      maskedKey,
+      error: err?.message || 'Network error connecting to Supabase from browser',
     };
   }
 }
 
-/**
- * Synchronize full CRM dataset into Supabase tables via bulk upserts
- */
+// =========================================================================
+// DATASET SYNCHRONIZATION (BULK UPSERTS)
+// =========================================================================
+
 export async function syncDatasetToSupabase(payload: {
   companies: Company[];
   departments: DepartmentItem[];
@@ -306,7 +965,7 @@ export async function syncDatasetToSupabase(payload: {
   syncedCounts: Record<string, number>;
   errors: string[];
 }> {
-  // 1. Try server-side secure sync first
+  // 1. Try server-side secure sync first (for Express/Node environment)
   try {
     const res = await fetch('/api/supabase/sync', {
       method: 'POST',
@@ -315,56 +974,99 @@ export async function syncDatasetToSupabase(payload: {
     });
     if (res.ok) {
       const data = await res.json();
-      return {
-        success: data.success,
-        syncedCounts: data.syncedCounts || {},
-        errors: data.errors || [],
-      };
+      if (data && data.success !== undefined) {
+        return {
+          success: data.success,
+          syncedCounts: data.syncedCounts || {},
+          errors: data.errors || [],
+        };
+      }
     }
   } catch {
-    // Fall back to client-side execution
+    // Expected on Vercel deployment -> Proceed directly with client-side execution
   }
 
+  // 2. Client-side execution (Works seamlessly on Vercel!)
   const client = getSupabaseClient();
   if (!client) {
     return {
       success: false,
       syncedCounts: {},
-      errors: ['Supabase client is not configured on client or server.'],
+      errors: ['Supabase client is not configured. Please enter your Project URL and Anon Key in Database Master.'],
     };
   }
 
   const syncedCounts: Record<string, number> = {};
   const errors: string[] = [];
 
-  // Helper to upsert a table safely
-  async function upsertTable(tableName: string, rows: any[]) {
+  // Track valid IDs for relational integrity
+  const validCompanyIds = new Set<string>();
+  const validCandidateIds = new Set<string>();
+
+  // Chunked batch upsert helper
+  async function upsertInChunks(tableName: string, rows: any[], chunkSize: number = 50) {
     if (!rows || rows.length === 0) return;
     try {
-      const { error } = await client!.from(tableName).upsert(rows, { onConflict: 'id' });
-      if (error) {
-        errors.push(`${tableName}: ${error.message}`);
-      } else {
-        syncedCounts[tableName] = rows.length;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const batch = rows.slice(i, i + chunkSize);
+        const { error } = await client!.from(tableName).upsert(batch, { onConflict: 'id' });
+        if (error) {
+          errors.push(`${tableName}: ${error.message}`);
+          return; // Stop further chunks for this table if error occurs
+        }
       }
+      syncedCounts[tableName] = rows.length;
     } catch (e: any) {
       errors.push(`${tableName}: ${e?.message || 'Unknown upsert error'}`);
     }
   }
 
-  // Sync core entities
-  await upsertTable('companies', payload.companies);
-  await upsertTable('departments', payload.departments);
-  await upsertTable('users', payload.users);
-  await upsertTable('candidates', payload.candidates);
-  await upsertTable('job_openings', payload.jobOpenings);
-  await upsertTable('interviews', payload.interviews);
-  await upsertTable('follow_ups', payload.followUps);
-  await upsertTable('offer_letters', payload.offerLetters);
-  await upsertTable('target_settings', payload.targetSettings);
-  await upsertTable('terms_clauses', payload.termsClauses);
+  // 1. Companies first (so children can reference company_id)
+  const dbCompanies = (payload.companies || []).map(companyToDb).filter(Boolean);
+  dbCompanies.forEach((c: any) => { if (c?.id) validCompanyIds.add(c.id); });
+  await upsertInChunks('companies', dbCompanies);
+
+  // 2. Departments
+  const dbDepartments = (payload.departments || []).map((d) => departmentToDb(d, validCompanyIds)).filter(Boolean);
+  await upsertInChunks('departments', dbDepartments);
+
+  // 3. Users
+  const dbUsers = (payload.users || []).map((u) => userToDb(u, validCompanyIds)).filter(Boolean);
+  await upsertInChunks('users', dbUsers);
+
+  // 4. Candidates (core ATS table)
+  const dbCandidates = (payload.candidates || []).map(candidateToDb).filter(Boolean);
+  dbCandidates.forEach((c: any) => { if (c?.id) validCandidateIds.add(c.id); });
+  await upsertInChunks('candidates', dbCandidates);
+
+  // 5. Job Openings
+  const dbJobOpenings = (payload.jobOpenings || []).map((j) => jobOpeningToDb(j, validCompanyIds)).filter(Boolean);
+  await upsertInChunks('job_openings', dbJobOpenings);
+
+  // 6. Interviews (references candidates)
+  const dbInterviews = (payload.interviews || []).map((i) => interviewToDb(i, validCandidateIds)).filter(Boolean);
+  await upsertInChunks('interviews', dbInterviews);
+
+  // 7. Follow-ups (references candidates)
+  const dbFollowUps = (payload.followUps || []).map((f) => followUpToDb(f, validCandidateIds)).filter(Boolean);
+  await upsertInChunks('follow_ups', dbFollowUps);
+
+  // 8. Offer Letters (references candidates & companies)
+  const dbOfferLetters = (payload.offerLetters || []).map((o) => offerLetterToDb(o, validCandidateIds, validCompanyIds)).filter(Boolean);
+  await upsertInChunks('offer_letters', dbOfferLetters);
+
+  // 9. Target Settings
+  const dbTargetSettings = (payload.targetSettings || []).map(targetSettingToDb).filter(Boolean);
+  await upsertInChunks('target_settings', dbTargetSettings);
+
+  // 10. Terms Clauses
+  const dbTermsClauses = (payload.termsClauses || []).map(termsClauseToDb).filter(Boolean);
+  await upsertInChunks('terms_clauses', dbTermsClauses);
+
+  // 11. Audit Logs (recent 100 entries)
   if (payload.auditLogs && payload.auditLogs.length > 0) {
-    await upsertTable('audit_logs', payload.auditLogs.slice(0, 100));
+    const dbAuditLogs = payload.auditLogs.slice(0, 100).map(auditLogToDb).filter(Boolean);
+    await upsertInChunks('audit_logs', dbAuditLogs);
   }
 
   return {
@@ -374,9 +1076,10 @@ export async function syncDatasetToSupabase(payload: {
   };
 }
 
-/**
- * Fetch dataset from Supabase tables
- */
+// =========================================================================
+// FETCH DATASET FROM SUPABASE
+// =========================================================================
+
 export async function fetchDatasetFromSupabase(): Promise<{
   success: boolean;
   data?: {
@@ -393,7 +1096,7 @@ export async function fetchDatasetFromSupabase(): Promise<{
   };
   error?: string;
 }> {
-  // 1. Try server-side secure fetch first
+  // 1. Try server-side proxy first
   try {
     const res = await fetch('/api/supabase/data');
     if (res.ok) {
@@ -403,29 +1106,30 @@ export async function fetchDatasetFromSupabase(): Promise<{
       }
     }
   } catch {
-    // Fall back to client
+    // Expected on Vercel deployment
   }
 
+  // 2. Direct browser fetch
   const client = getSupabaseClient();
   if (!client) {
     return {
       success: false,
-      error: 'Supabase client is not configured.',
+      error: 'Supabase client is not configured on client or server.',
     };
   }
 
   try {
     const [
-      { data: companies },
-      { data: departments },
-      { data: users },
-      { data: candidates },
-      { data: jobOpenings },
-      { data: interviews },
-      { data: followUps },
-      { data: offerLetters },
-      { data: targetSettings },
-      { data: termsClauses },
+      { data: rawCompanies },
+      { data: rawDepartments },
+      { data: rawUsers },
+      { data: rawCandidates },
+      { data: rawJobOpenings },
+      { data: rawInterviews },
+      { data: rawFollowUps },
+      { data: rawOfferLetters },
+      { data: rawTargetSettings },
+      { data: rawTermsClauses },
     ] = await Promise.all([
       client.from('companies').select('*'),
       client.from('departments').select('*'),
@@ -442,16 +1146,16 @@ export async function fetchDatasetFromSupabase(): Promise<{
     return {
       success: true,
       data: {
-        companies: companies || undefined,
-        departments: departments || undefined,
-        users: users || undefined,
-        candidates: candidates || undefined,
-        jobOpenings: jobOpenings || undefined,
-        interviews: interviews || undefined,
-        followUps: followUps || undefined,
-        offerLetters: offerLetters || undefined,
-        targetSettings: targetSettings || undefined,
-        termsClauses: termsClauses || undefined,
+        companies: rawCompanies ? rawCompanies.map(companyFromDb) : undefined,
+        departments: rawDepartments ? rawDepartments.map(departmentFromDb) : undefined,
+        users: rawUsers ? rawUsers.map(userFromDb) : undefined,
+        candidates: rawCandidates ? rawCandidates.map(candidateFromDb) : undefined,
+        jobOpenings: rawJobOpenings ? rawJobOpenings.map(jobOpeningFromDb) : undefined,
+        interviews: rawInterviews ? rawInterviews.map(interviewFromDb) : undefined,
+        followUps: rawFollowUps ? rawFollowUps.map(followUpFromDb) : undefined,
+        offerLetters: rawOfferLetters ? rawOfferLetters.map(offerLetterFromDb) : undefined,
+        targetSettings: rawTargetSettings ? rawTargetSettings.map(targetSettingFromDb) : undefined,
+        termsClauses: rawTermsClauses ? rawTermsClauses.map(termsClauseFromDb) : undefined,
       },
     };
   } catch (err: any) {
@@ -459,6 +1163,63 @@ export async function fetchDatasetFromSupabase(): Promise<{
       success: false,
       error: err?.message || 'Failed to fetch data from Supabase',
     };
+  }
+}
+
+// =========================================================================
+// REAL-TIME DIRECT CANDIDATE ACTIONS (Single & Batch Push)
+// =========================================================================
+
+export async function pushCandidateToSupabase(candidate: Candidate): Promise<{ success: boolean; error?: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, error: 'Supabase client not initialized' };
+
+  try {
+    const dbRow = candidateToDb(candidate);
+    if (!dbRow) return { success: false, error: 'Invalid candidate data' };
+
+    const { error } = await client.from('candidates').upsert(dbRow, { onConflict: 'id' });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Failed to push candidate' };
+  }
+}
+
+export async function pushCandidatesBatchToSupabase(candidates: Candidate[]): Promise<{ success: boolean; count: number; error?: string }> {
+  const client = getSupabaseClient();
+  if (!client || candidates.length === 0) return { success: false, count: 0, error: 'Supabase client not initialized' };
+
+  try {
+    const dbRows = candidates.map(candidateToDb).filter(Boolean);
+    const chunkSize = 50;
+    for (let i = 0; i < dbRows.length; i += chunkSize) {
+      const batch = dbRows.slice(i, i + chunkSize);
+      const { error } = await client.from('candidates').upsert(batch, { onConflict: 'id' });
+      if (error) {
+        return { success: false, count: i, error: error.message };
+      }
+    }
+    return { success: true, count: dbRows.length };
+  } catch (e: any) {
+    return { success: false, count: 0, error: e?.message || 'Failed to push candidates batch' };
+  }
+}
+
+export async function deleteCandidateFromSupabase(id: string): Promise<{ success: boolean; error?: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, error: 'Supabase client not initialized' };
+
+  try {
+    const { error } = await client.from('candidates').delete().eq('id', id);
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Failed to delete candidate' };
   }
 }
 

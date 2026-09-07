@@ -52,6 +52,30 @@ export function extractProjectId(url: string): string {
   }
 }
 
+export const DEFAULT_SUPABASE_URL = 'https://snvgarluywefmlsimikf.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTUzODcsImV4cCI6MjEwNDE3MTM4N30.yXUxN8bSlNciLCHW_yAS5ioOFoZpkqi4nS2D5wl4cVo';
+
+export function extractJwtProjectRef(token: string): string | null {
+  if (!token) return null;
+  try {
+    const parts = token.trim().split('.');
+    if (parts.length >= 2) {
+      let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) {
+        base64 += '=';
+      }
+      const jsonStr =
+        typeof atob !== 'undefined'
+          ? atob(base64)
+          : Buffer.from(base64, 'base64').toString('utf8');
+      const payload = JSON.parse(jsonStr);
+      return payload.ref || null;
+    }
+  } catch {}
+  return null;
+}
+
 const LOCAL_STORAGE_URL_KEY = 'esl_supabase_url_override';
 const LOCAL_STORAGE_ANON_KEY = 'esl_supabase_anon_key_override';
 
@@ -73,10 +97,13 @@ export function getSupabaseUrl(): string {
     return normalizeSupabaseUrl(envUrl);
   }
 
-  return 'https://snvgarluywefmlsimikf.supabase.co';
+  return DEFAULT_SUPABASE_URL;
 }
 
 export function getSupabaseAnonKey(): string {
+  const currentUrl = getSupabaseUrl();
+  const currentProjId = extractProjectId(currentUrl);
+
   try {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(LOCAL_STORAGE_ANON_KEY);
@@ -84,14 +111,24 @@ export function getSupabaseAnonKey(): string {
         const cleaned = cleanKey(saved);
         // Automatically purge any dummy / placeholder fake key
         if (
-          cleaned &&
-          !cleaned.startsWith('sb_secret_') &&
-          cleaned !== 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m' &&
-          !cleaned.toLowerCase().includes('placeholder')
+          !cleaned ||
+          cleaned.startsWith('sb_secret_') ||
+          cleaned === 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m' ||
+          cleaned.toLowerCase().includes('placeholder')
         ) {
-          return cleaned;
-        } else {
           localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+        } else {
+          // If this key is a JWT, verify its project ref matches current URL
+          const keyRef = extractJwtProjectRef(cleaned);
+          if (keyRef && keyRef !== currentProjId) {
+            // Mismatched project key! This produces "Unregistered API key". Purge it.
+            console.warn(
+              `[Supabase] Purging cached key: Key belongs to project "${keyRef}" but active URL is "${currentProjId}".`
+            );
+            localStorage.removeItem(LOCAL_STORAGE_ANON_KEY);
+          } else {
+            return cleaned;
+          }
         }
       }
     }
@@ -110,8 +147,16 @@ export function getSupabaseAnonKey(): string {
       !cleaned.startsWith('sb_secret_') &&
       cleaned !== 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m'
     ) {
-      return cleaned;
+      const keyRef = extractJwtProjectRef(cleaned);
+      if (!keyRef || keyRef === currentProjId) {
+        return cleaned;
+      }
     }
+  }
+
+  // Fallback to verified default anon key if connected to default project
+  if (currentProjId === 'snvgarluywefmlsimikf') {
+    return DEFAULT_SUPABASE_ANON_KEY;
   }
 
   return '';

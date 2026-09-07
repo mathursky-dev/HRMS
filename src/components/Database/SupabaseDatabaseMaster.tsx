@@ -42,6 +42,9 @@ import {
   extractProjectId,
   normalizeSupabaseUrl,
   getSupabaseUrl,
+  DEFAULT_SUPABASE_URL,
+  DEFAULT_SUPABASE_ANON_KEY,
+  extractJwtProjectRef,
   SupabaseHealthResult
 } from '../../lib/supabase';
 
@@ -169,8 +172,20 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
     runHealthCheck();
   };
 
+  const handleUseDefaultKey = () => {
+    setSupabaseUrlInput(DEFAULT_SUPABASE_URL);
+    setSupabaseKeyInput(DEFAULT_SUPABASE_ANON_KEY);
+    setAnonKeyInput(DEFAULT_SUPABASE_ANON_KEY);
+    setSupabaseAnonKeyOverride(DEFAULT_SUPABASE_ANON_KEY);
+    setConfigFeedback({
+      success: true,
+      message: 'Restored verified project anon key. Re-testing connection...',
+    });
+    runHealthCheck();
+  };
+
   const handleCopyVercelEnv = () => {
-    const keyVal = anonKeyInput || supabaseKeyInput || '';
+    const keyVal = anonKeyInput || supabaseKeyInput || DEFAULT_SUPABASE_ANON_KEY;
     const vercelEnvText = `VITE_SUPABASE_URL=${activeSupabaseUrl}\nVITE_SUPABASE_ANON_KEY=${keyVal}`;
     navigator.clipboard.writeText(vercelEnvText);
     setCopiedVercelEnv(true);
@@ -417,6 +432,54 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                 {showKeyPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+
+            {/* Real-time mismatch and quick-fill helper */}
+            {(() => {
+              const inputUrlProjId = extractProjectId(supabaseUrlInput || activeSupabaseUrl);
+              const inputKeyRef = extractJwtProjectRef(supabaseKeyInput);
+              const isKeyMismatched = Boolean(inputKeyRef && inputUrlProjId && inputKeyRef !== inputUrlProjId);
+
+              if (isKeyMismatched) {
+                return (
+                  <div className="mt-1 p-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-[11px] flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <p>
+                        <strong>Key Mismatch:</strong> This API key was issued for project <code>{inputKeyRef}</code>, but your Project URL is <code>{inputUrlProjId}</code>. Supabase will reject this key with <em>"Unregistered API key"</em>.
+                      </p>
+                      {inputUrlProjId === 'snvgarluywefmlsimikf' && (
+                        <button
+                          type="button"
+                          onClick={handleUseDefaultKey}
+                          className="font-bold underline text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 cursor-pointer flex items-center gap-1 mt-1"
+                        >
+                          <Zap className="w-3 h-3" />
+                          <span>Click here to fill verified project anon key</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (inputUrlProjId === 'snvgarluywefmlsimikf' && !supabaseKeyInput) {
+                return (
+                  <div className="pt-0.5 flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400">Default project key ready</span>
+                    <button
+                      type="button"
+                      onClick={handleUseDefaultKey}
+                      className="text-emerald-600 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Zap className="w-3 h-3" />
+                      <span>Use Verified Anon Key</span>
+                    </button>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
           </div>
 
           <div className="md:col-span-2 flex items-center gap-1.5">
@@ -563,6 +626,16 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                     </div>
 
                     <div className="pt-1 flex flex-wrap items-center gap-2">
+                      {activeProjectId === 'snvgarluywefmlsimikf' && (
+                        <button
+                          onClick={handleUseDefaultKey}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                          <span>Use Verified Project Anon Key</span>
+                        </button>
+                      )}
+
                       <button
                         onClick={() => {
                           const el = document.getElementById('supabase-key-input-field');
@@ -582,7 +655,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                         className="px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-700 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-800 dark:text-rose-200 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Clear Cached Credentials</span>
+                        <span>Clear Cached Overrides</span>
                       </button>
 
                       <button
@@ -1007,6 +1080,20 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                   >
                     Save & Test Key
                   </button>
+                  {activeProjectId === 'snvgarluywefmlsimikf' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAnonKeyInput(DEFAULT_SUPABASE_ANON_KEY);
+                        setSupabaseAnonKeyOverride(DEFAULT_SUPABASE_ANON_KEY);
+                        runHealthCheck();
+                      }}
+                      className="px-3 py-2 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 hover:bg-emerald-200 dark:hover:bg-emerald-900 text-emerald-800 dark:text-emerald-300 font-semibold text-xs transition-colors shrink-0 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Use Default Anon Key</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleClearCredentials}
@@ -1016,6 +1103,20 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                     <span>Clear Overrides</span>
                   </button>
                 </div>
+
+                {/* Inline check */}
+                {(() => {
+                  const keyRef = extractJwtProjectRef(anonKeyInput);
+                  if (keyRef && keyRef !== activeProjectId) {
+                    return (
+                      <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3 shrink-0" />
+                        <span>Warning: This key belongs to project "{keyRef}", not "{activeProjectId}". It will cause "Unregistered API key".</span>
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
               <div className="pt-1 text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">

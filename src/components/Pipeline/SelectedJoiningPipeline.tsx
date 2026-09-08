@@ -21,6 +21,7 @@ import { useRecruitment } from '../../context/RecruitmentContext';
 import { Candidate, CandidateStatus, Department } from '../../types';
 import { TODAY } from '../../mockData';
 import { formatCurrency } from '../../utils/formatters';
+import { candidateMatchesCompany } from '../../utils/companyUtils';
 
 type PipelineStageKey = 'SELECTED' | 'CONFIRMED' | 'JOINED' | 'ACTIVE' | 'BACKOUT';
 
@@ -95,7 +96,7 @@ const STAGES: StageConfig[] = [
 ];
 
 export const SelectedJoiningPipeline: React.FC = () => {
-  const { candidates, updateCandidate, activeCompanyId } = useRecruitment();
+  const { candidates, updateCandidate } = useRecruitment();
 
   const [viewMode, setViewMode] = useState<'KANBAN' | 'LIST'>('KANBAN');
   const [activeTab, setActiveTab] = useState<PipelineStageKey>('ACTIVE');
@@ -110,10 +111,6 @@ export const SelectedJoiningPipeline: React.FC = () => {
   // Filter candidates relevant to this pipeline
   const pipelineCandidates = candidates.filter((c) => {
     if (c.isArchived) return false;
-
-    // Check active company scoping
-    const candCompId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
-    if (activeCompanyId !== 'ALL' && candCompId !== activeCompanyId) return false;
     
     // Check department filter
     if (deptFilter !== 'ALL' && c.department !== deptFilter) return false;

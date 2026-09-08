@@ -1,16 +1,14 @@
 import React from 'react';
 import { useRecruitment } from '../../context/RecruitmentContext';
+import { candidateMatchesCompany } from '../../utils/companyUtils';
 
 export const RecruitmentFunnel: React.FC = () => {
-  const { candidates, activeCompanyId } = useRecruitment();
+  const { candidates, activeCompanyId, companies } = useRecruitment();
 
   const scopedCandidates = React.useMemo(() => {
     if (activeCompanyId === 'ALL') return candidates;
-    return candidates.filter(c => {
-      const compId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
-      return compId === activeCompanyId;
-    });
-  }, [candidates, activeCompanyId]);
+    return candidates.filter(c => candidateMatchesCompany(c, activeCompanyId, companies));
+  }, [candidates, activeCompanyId, companies]);
 
   const totalLeads = scopedCandidates.length;
   const contacted = scopedCandidates.filter(

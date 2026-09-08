@@ -29,6 +29,7 @@ import {
 import { useRecruitment } from '../../context/RecruitmentContext';
 import { Candidate, CandidateStatus, CandidateSource, Department } from '../../types';
 import { getStatusBadgeClass, getLeadAgingCategory, calculateDaysDifference } from '../../utils/formatters';
+import { candidateMatchesCompany } from '../../utils/companyUtils';
 import { CandidateModal } from './CandidateModal';
 import { CandidateDetailModal } from './CandidateDetailModal';
 import { FollowUpEntryModal } from '../FollowUps/FollowUpEntryModal';
@@ -117,41 +118,32 @@ export const CandidateList: React.FC<{
     return Array.from(rolesSet).sort();
   }, [candidates]);
 
-  // Candidates scoped to active company selection
-  const companyScopedCandidates = useMemo(() => {
-    if (activeCompanyId === 'ALL') return candidates;
-    return candidates.filter(c => {
-      const candCompId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
-      return candCompId === activeCompanyId;
-    });
-  }, [candidates, activeCompanyId]);
-
   // Counts by job role (active or archived according to showArchived)
   const roleCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    companyScopedCandidates.forEach((c) => {
+    candidates.forEach((c) => {
       if (!showArchived && c.isArchived) return;
       if (showArchived && !c.isArchived) return;
       const role = c.positionApplied?.trim() || 'Other';
       counts[role] = (counts[role] || 0) + 1;
     });
     return counts;
-  }, [companyScopedCandidates, showArchived]);
+  }, [candidates, showArchived]);
 
   // Counts by status
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    companyScopedCandidates.forEach((c) => {
+    candidates.forEach((c) => {
       if (!showArchived && c.isArchived) return;
       if (showArchived && !c.isArchived) return;
       counts[c.status] = (counts[c.status] || 0) + 1;
     });
     return counts;
-  }, [companyScopedCandidates, showArchived]);
+  }, [candidates, showArchived]);
 
   const activeCandidatesCount = useMemo(() => {
-    return companyScopedCandidates.filter((c) => (showArchived ? c.isArchived : !c.isArchived)).length;
-  }, [companyScopedCandidates, showArchived]);
+    return candidates.filter((c) => (showArchived ? c.isArchived : !c.isArchived)).length;
+  }, [candidates, showArchived]);
 
   // Quick Status Funnel Tabs
   const QUICK_STATUS_TABS = [
@@ -196,13 +188,12 @@ export const CandidateList: React.FC<{
       if (showArchived && !c.isArchived) return false;
 
       // Active Company global context
-      const candCompId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
-      if (activeCompanyId !== 'ALL' && candCompId !== activeCompanyId) {
+      if (activeCompanyId !== 'ALL' && c.companyId && c.companyId !== activeCompanyId) {
         return false;
       }
 
       // Company Filter
-      if (companyFilter !== 'ALL' && candCompId !== companyFilter) return false;
+      if (companyFilter !== 'ALL' && c.companyId !== companyFilter) return false;
 
       // Global Text search across all major candidate fields
       if (searchTerm.trim()) {

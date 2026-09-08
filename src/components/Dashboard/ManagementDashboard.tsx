@@ -5,6 +5,7 @@ import { TargetCards } from './TargetCards';
 import { HrControlRoom } from './HrControlRoom';
 import { RecruitmentFunnel } from './RecruitmentFunnel';
 import { HiringStatusDonutChart } from './HiringStatusDonutChart';
+import { candidateMatchesCompany, getCandidateCompanyId } from '../../utils/companyUtils';
 
 interface ManagementDashboardProps {
   onOpenAddCandidate: () => void;
@@ -15,39 +16,14 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
   onOpenAddCandidate,
   onNavigate,
 }) => {
-  const { candidates, interviews, followUps, activeCompanyId, companies, currentUser } = useRecruitment();
+  const { candidates, interviews, followUps } = useRecruitment();
   const [selectedDept, setSelectedDept] = useState<'ALL' | 'HR Recruitment' | 'BKD Recruitment'>('ALL');
 
-  const activeComp = companies.find(c => c.id === activeCompanyId);
-  const isSuperAdmin = currentUser.role === 'Super Admin' || currentUser.userId === 'admin';
-
-  // Candidate ID to Company ID lookup map
-  const candidateCompanyMap = React.useMemo(() => {
-    return new Map(candidates.map(c => [
-      c.id, 
-      c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1')
-    ]));
-  }, [candidates]);
-
-  // Filter candidates if department selected and scoped to active company
+  // Filter candidates if department selected
   const filteredCandidates = candidates.filter((c) => {
     if (c.isArchived) return false;
-    const candCompId = c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1');
-    if (activeCompanyId !== 'ALL' && candCompId !== activeCompanyId) return false;
     if (selectedDept !== 'ALL' && c.department !== selectedDept) return false;
     return true;
-  });
-
-  const filteredFollowUps = followUps.filter((f) => {
-    if (activeCompanyId === 'ALL') return true;
-    const compId = candidateCompanyMap.get(f.candidateId);
-    return compId ? compId === activeCompanyId : true;
-  });
-
-  const filteredInterviews = interviews.filter((i) => {
-    if (activeCompanyId === 'ALL') return true;
-    const compId = candidateCompanyMap.get(i.candidateId);
-    return compId ? compId === activeCompanyId : true;
   });
 
   const totalCandidates = filteredCandidates.length;
@@ -56,7 +32,7 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
     (c) => c.createdAt.startsWith(TODAY) || c.status === 'New Lead'
   ).length;
 
-  const callsToday = filteredFollowUps.filter(
+  const callsToday = followUps.filter(
     (f) => f.followUpDate === TODAY && (f.followUpMode === 'Call' || f.isCompleted)
   ).length + filteredCandidates.filter((c) => c.firstCallDate?.startsWith(TODAY)).length;
 
@@ -64,11 +40,11 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
     (c) => c.status === 'Connected' || c.status === 'Interested'
   ).length;
 
-  const followUpsToday = filteredFollowUps.filter((f) => f.followUpDate === TODAY).length;
+  const followUpsToday = followUps.filter((f) => f.followUpDate === TODAY).length;
 
-  const interviewsToday = filteredInterviews.filter((i) => i.interviewDate === TODAY).length;
+  const interviewsToday = interviews.filter((i) => i.interviewDate === TODAY).length;
 
-  const interviewsConductedToday = filteredInterviews.filter(
+  const interviewsConductedToday = interviews.filter(
     (i) => i.interviewDate === TODAY && i.attendanceStatus === 'Conducted'
   ).length;
 
@@ -82,7 +58,7 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
 
   const activeJoining = filteredCandidates.filter((c) => c.isActiveJoining).length;
 
-  const overdueFollowUps = filteredFollowUps.filter(
+  const overdueFollowUps = followUps.filter(
     (f) => !f.isCompleted && f.followUpDate < TODAY
   ).length;
 
@@ -96,23 +72,8 @@ export const ManagementDashboard: React.FC<ManagementDashboardProps> = ({
       {/* High Density Header */}
       <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-1 gap-3">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Management Dashboard</h1>
-            {activeCompanyId === 'ALL' ? (
-              <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded border border-indigo-200">
-                All Companies Consolidated
-              </span>
-            ) : (
-              <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded border border-blue-200">
-                {activeComp?.code || 'Company'} Scoped
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-slate-500">
-            {activeCompanyId === 'ALL' 
-              ? 'All Entities Consolidated • Global Super Admin View' 
-              : `${activeComp?.name || 'Company Workspace'} • Recruitment Lifecycle Tracking`}
-          </p>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Management Dashboard</h1>
+          <p className="text-xs text-slate-500">Essential Soul Lifestyle Pvt Ltd • Recruitment Lifecycle Tracking</p>
         </div>
         <div className="flex gap-2">
           <button

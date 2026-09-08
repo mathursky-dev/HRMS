@@ -76,11 +76,21 @@ export function getSupabaseUrl(): string {
   return 'https://snvgarluywefmlsimikf.supabase.co';
 }
 
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTUzODcsImV4cCI6MjEwNDE3MTM4N30.yXUxN8bSlNciLCHW_yAS5ioOFoZpkqi4nS2D5wl4cVo';
+
 export function getSupabaseAnonKey(): string {
   try {
     const saved = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_ANON_KEY) : null;
     if (saved && saved.trim().length > 0) {
-      return cleanKey(saved);
+      if (saved.startsWith('sb_secret_') || !saved.includes('eyJ')) {
+        // Clean out invalid legacy keys from localStorage
+        try { localStorage.removeItem(LOCAL_STORAGE_ANON_KEY); } catch {}
+      } else {
+        const cleaned = cleanKey(saved);
+        if (cleaned.startsWith('eyJ')) {
+          return cleaned;
+        }
+      }
     }
   } catch {}
 
@@ -90,21 +100,28 @@ export function getSupabaseAnonKey(): string {
     (import.meta.env as any).NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     (typeof process !== 'undefined' && process.env?.SUPABASE_ANON_KEY);
 
-  if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
-    return cleanKey(envKey);
+  if (envKey && typeof envKey === 'string' && envKey.trim().length > 0 && !envKey.startsWith('sb_secret_')) {
+    const cleaned = cleanKey(envKey);
+    if (cleaned.startsWith('eyJ')) {
+      return cleaned;
+    }
   }
 
-  return '';
+  return DEFAULT_SUPABASE_ANON_KEY;
 }
 
 function cleanKey(raw: string): string {
+  if (!raw) return DEFAULT_SUPABASE_ANON_KEY;
   let clean = raw.trim().replace(/^["']|["']$/g, '').replace(/^[A-Z0-9_]+=\s*/i, '').trim();
-  if (clean.includes(' ')) {
-    const tokens = clean.split(/\s+/);
-    const jwt = tokens.find(t => t.includes('eyJ'));
-    if (jwt) clean = jwt.replace(/^[A-Z0-9_]+=\s*/i, '');
+
+  // If string contains a signed JWT, extract it cleanly
+  const jwtMatch = clean.match(/\b(eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\b/);
+  if (jwtMatch) {
+    return jwtMatch[1];
   }
-  return clean;
+
+  // Supabase REST API strictly requires a valid signed JWT
+  return DEFAULT_SUPABASE_ANON_KEY;
 }
 
 export const SUPABASE_URL = getSupabaseUrl();
@@ -711,7 +728,8 @@ export async function updateSupabaseServerConfig(url: string, key: string): Prom
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, key }),
     });
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       return data;
     }
@@ -1249,7 +1267,8 @@ export async function deleteCandidateFromSupabase(id: string): Promise<{ success
 export async function deleteCompanyFromSupabase(id: string): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch(`/api/companies/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    if (res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
       const data = await res.json();
       return { success: data.success ?? true };
     }

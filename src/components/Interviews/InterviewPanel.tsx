@@ -16,9 +16,10 @@ import { useRecruitment } from '../../context/RecruitmentContext';
 import { TODAY } from '../../mockData';
 import { InterviewRecord, AttendanceStatus } from '../../types';
 import { InterviewEvaluationModal } from './InterviewEvaluationModal';
+import { getCandidateCompanyId } from '../../utils/companyUtils';
 
 export const InterviewPanel: React.FC = () => {
-  const { interviews, updateInterviewAttendance, candidates, activeCompanyId } = useRecruitment();
+  const { interviews, updateInterviewAttendance, candidates, activeCompanyId, companies } = useRecruitment();
 
   const [tab, setTab] = useState<'TODAY' | 'UPCOMING' | 'CONDUCTED' | 'NOSHOW'>('TODAY');
   const [selectedHr, setSelectedHr] = useState<string>('ALL');
@@ -31,9 +32,9 @@ export const InterviewPanel: React.FC = () => {
   const candidateCompanyMap = React.useMemo(() => {
     return new Map(candidates.map(c => [
       c.id, 
-      c.companyId || (c.companyName?.toLowerCase().includes('bkd') ? 'comp-2' : c.companyName?.toLowerCase().includes('organic') ? 'comp-3' : 'comp-1')
+      getCandidateCompanyId(c, companies)
     ]));
-  }, [candidates]);
+  }, [candidates, companies]);
 
   // Scope interviews by active company (or show all for Super Admin when 'ALL')
   const scopedInterviews = React.useMemo(() => {

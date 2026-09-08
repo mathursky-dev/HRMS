@@ -37,9 +37,6 @@ import {
   getSupabaseAnonKey,
   setSupabaseAnonKeyOverride,
   updateSupabaseServerConfig,
-  extractProjectId,
-  normalizeSupabaseUrl,
-  getSupabaseUrl,
   SupabaseHealthResult
 } from '../../lib/supabase';
 
@@ -78,14 +75,10 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
 
   // Server-side dynamic DB Connection state
   const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(SUPABASE_URL);
-  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>('sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m');
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState<string>('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODU5NTM4NywiZXhwIjoyMTA0MTcxMzg3fQ.o9rTQB_rbBYfWAxRf3h1cDA7vKBpCBEXMjAhFrH8U1Y');
   const [showKeyPassword, setShowKeyPassword] = useState<boolean>(false);
   const [isSavingConfig, setIsSavingConfig] = useState<boolean>(false);
   const [configFeedback, setConfigFeedback] = useState<{ success: boolean; message: string } | null>(null);
-
-  const activeProjectId = health?.projectId || extractProjectId(supabaseUrlInput || getSupabaseUrl());
-  const activeSupabaseUrl = health?.supabaseUrl || normalizeSupabaseUrl(supabaseUrlInput || getSupabaseUrl());
-  const activeApiUrl = health?.apiUrl || `${activeSupabaseUrl}/rest/v1/`;
 
   const runHealthCheck = async () => {
     setIsLoadingHealth(true);
@@ -100,8 +93,8 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
         isConfigured: false,
         isConnected: false,
         hasAnonKey: !!getSupabaseAnonKey(),
-        projectId: activeProjectId,
-        apiUrl: activeApiUrl,
+        projectId: SUPABASE_PROJECT_ID,
+        apiUrl: SUPABASE_REST_API,
         error: e?.message || 'Failed to ping Supabase'
       });
     } finally {
@@ -149,7 +142,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
   };
 
   const handleCopyUrl = () => {
-    navigator.clipboard.writeText(activeApiUrl);
+    navigator.clipboard.writeText(SUPABASE_REST_API);
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 2000);
   };
@@ -274,7 +267,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
             </button>
 
             <a
-              href={`https://supabase.com/dashboard/project/${activeProjectId}`}
+              href={`https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}`}
               target="_blank"
               rel="noreferrer"
               className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm"
@@ -289,12 +282,12 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4 pt-4 border-t border-slate-700/60 text-xs font-mono">
           <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
             <span className="text-slate-400 text-[11px]">PROJECT ID:</span>
-            <span className="font-bold text-emerald-400">{activeProjectId}</span>
+            <span className="font-bold text-emerald-400">{SUPABASE_PROJECT_ID}</span>
           </div>
 
           <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between col-span-1 sm:col-span-2">
             <span className="text-slate-400 text-[11px] shrink-0 mr-2">REST API:</span>
-            <span className="font-medium text-slate-200 truncate">{activeApiUrl}</span>
+            <span className="font-medium text-slate-200 truncate">{SUPABASE_REST_API}</span>
             <button
               onClick={handleCopyUrl}
               className="ml-2 text-slate-400 hover:text-white transition-colors"
@@ -371,7 +364,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
               <span className="flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                <span>Supabase API Key (Secret or Anon)</span>
+                <span>Supabase API Key (service_role or anon JWT)</span>
               </span>
               <span className="text-[10px] text-slate-400 font-normal">Server-proxied</span>
             </label>
@@ -380,7 +373,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
                 type={showKeyPassword ? 'text' : 'password'}
                 value={supabaseKeyInput}
                 onChange={(e) => setSupabaseKeyInput(e.target.value)}
-                placeholder="sb_secret_... or eyJhbGciOi..."
+                placeholder="Paste Supabase JWT API key (eyJhbGciOi...)"
                 className="w-full px-3 py-2 pr-9 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-mono text-xs text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
               <button
@@ -637,7 +630,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
               </button>
 
               <a
-                href={`https://supabase.com/dashboard/project/${activeProjectId}/sql`}
+                href={`https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}/sql`}
                 target="_blank"
                 rel="noreferrer"
                 className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors flex items-center gap-1.5"
@@ -656,7 +649,7 @@ export const SupabaseDatabaseMaster: React.FC<SupabaseDatabaseMasterProps> = ({ 
             </h4>
             <ol className="list-decimal list-inside space-y-1.5 text-slate-300 ml-1">
               <li>Click the green <strong className="text-emerald-400">Copy SQL Schema DDL</strong> button above.</li>
-              <li>Open your Supabase Project (<strong className="text-white">{activeProjectId}</strong>) &rarr; Click <strong className="text-white">SQL Editor</strong> on the left.</li>
+              <li>Open your Supabase Project (<strong className="text-white">{SUPABASE_PROJECT_ID}</strong>) &rarr; Click <strong className="text-white">SQL Editor</strong> on the left.</li>
               <li>Click <strong className="text-white">New Query</strong>, paste the copied script into the query box, and click <strong className="text-emerald-400">Run</strong>.</li>
             </ol>
           </div>
@@ -863,7 +856,7 @@ VITE_SUPABASE_ANON_KEY=`}
               <div className="pt-2 text-[11px] text-slate-500 flex items-center gap-1.5">
                 <span>Where to find your key:</span>
                 <a
-                  href={`https://supabase.com/dashboard/project/${activeProjectId}/settings/api`}
+                  href={`https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}/settings/api`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-emerald-600 dark:text-emerald-400 underline font-semibold flex items-center gap-1"

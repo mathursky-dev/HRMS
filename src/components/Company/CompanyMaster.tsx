@@ -54,6 +54,8 @@ export const CompanyMaster: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'directory' | 'credentials'>('directory');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [autoHideInactive, setAutoHideInactive] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isCredentialsMasterOpen, setIsCredentialsMasterOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -308,6 +310,52 @@ export const CompanyMaster: React.FC = () => {
     ]);
   };
 
+  const handleAddBulkRow = () => {
+    setBulkRows(prev => [...prev, { name: '', code: '', city: 'Noida', phone: '', adminUserId: '' }]);
+  };
+
+  const handleRemoveBulkRow = (index: number) => {
+    setBulkRows(prev => {
+      if (prev.length <= 1) return [{ name: '', code: '', city: 'Noida', phone: '', adminUserId: '' }];
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
+  const handleClearBulkRows = () => {
+    setBulkRows([
+      { name: '', code: '', city: 'Noida', phone: '', adminUserId: '' },
+      { name: '', code: '', city: 'Delhi', phone: '', adminUserId: '' },
+      { name: '', code: '', city: 'Gurugram', phone: '', adminUserId: '' },
+    ]);
+    setBulkText('');
+  };
+
+  const handleUpdateBulkRow = (index: number, field: string, val: string) => {
+    setBulkRows(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: val };
+      // Auto-generate uppercase short code if editing name and code is empty/short
+      if (field === 'name' && (!next[index].code || next[index].code.length <= 2)) {
+        const words = val.trim().split(/\s+/).filter(Boolean);
+        let genCode = '';
+        if (words.length >= 3) {
+          genCode = (words[0][0] + words[1][0] + words[2][0]).toUpperCase();
+        } else if (words.length === 2) {
+          genCode = (words[0][0] + words[1][0] + (words[1][1] || 'L')).toUpperCase();
+        } else if (words.length === 1 && words[0].length >= 2) {
+          genCode = words[0].substring(0, 3).toUpperCase();
+        }
+        if (genCode) {
+          next[index].code = genCode;
+          if (!next[index].adminUserId) {
+            next[index].adminUserId = `${genCode.toLowerCase()}.admin`;
+          }
+        }
+      }
+      return next;
+    });
+  };
+
   const handleBulkSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const companiesToRegister: Array<Omit<Company, 'id' | 'createdAt'>> = [];
@@ -315,7 +363,10 @@ export const CompanyMaster: React.FC = () => {
     if (bulkMode === 'table') {
       bulkRows.forEach(row => {
         const name = row.name.trim();
-        const code = (row.code.trim() || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        let code = (row.code.trim() || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!code && name) {
+          code = name.substring(0, 3).toUpperCase();
+        }
         if (name && code) {
           companiesToRegister.push({
             name,
@@ -345,7 +396,8 @@ export const CompanyMaster: React.FC = () => {
         const parts = line.split(',').map(p => p.trim());
         const name = parts[0];
         if (name) {
-          const code = (parts[1] || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+          let code = (parts[1] || name.substring(0, 3)).toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (!code) code = name.substring(0, 3).toUpperCase();
           const city = parts[2] || 'Noida';
           const phone = parts[3] || '+91 98000 00000';
           companiesToRegister.push({
@@ -373,7 +425,7 @@ export const CompanyMaster: React.FC = () => {
     }
 
     if (companiesToRegister.length === 0) {
-      alert('Please enter at least one company name to add.');
+      alert('Please enter at least one company name in the table or text box.');
       return;
     }
 
@@ -386,9 +438,32 @@ export const CompanyMaster: React.FC = () => {
     setTimeout(() => setNotificationToast(null), 5000);
   };
 
+  const handleToggleActive = (comp: Company) => {
+    const newActive = !comp.isActive;
+    updateCompany(comp.id, { isActive: newActive });
+    setNotificationToast({
+      type: 'success',
+      message: `Company "${comp.name}" marked as ${newActive ? 'Active (Visible)' : 'Inactive (Hidden from active pipelines)'}.`,
+    });
+    setTimeout(() => setNotificationToast(null), 4000);
+  };
+
   const handleDelete = (id: string, name: string) => {
     const targetComp = companies.find(c => c.id === id) || ({ id, name, code: 'N/A' } as Company);
     setCompanyToDelete(targetComp);
+  };
+
+  const handleConfirmHide = () => {
+    if (!companyToDelete) return;
+    const targetName = companyToDelete.name;
+    const targetId = companyToDelete.id;
+    updateCompany(targetId, { isActive: false });
+    setCompanyToDelete(null);
+    setNotificationToast({
+      type: 'success',
+      message: `Company "${targetName}" has been deactivated and hidden from active views. Historical records remain preserved.`,
+    });
+    setTimeout(() => setNotificationToast(null), 4500);
   };
 
   const handleConfirmDelete = () => {
@@ -399,7 +474,7 @@ export const CompanyMaster: React.FC = () => {
     setCompanyToDelete(null);
     setNotificationToast({
       type: 'success',
-      message: `Company "${targetName}" was removed from the registry successfully.`,
+      message: `Company "${targetName}" was permanently removed from the registry.`,
     });
     setTimeout(() => {
       setNotificationToast(null);
@@ -425,6 +500,11 @@ export const CompanyMaster: React.FC = () => {
   };
 
   const filteredCompanies = companies.filter(c => {
+    // Check autoHideInactive or statusFilter
+    if (autoHideInactive && !c.isActive) return false;
+    if (statusFilter === 'active' && !c.isActive) return false;
+    if (statusFilter === 'inactive' && c.isActive) return false;
+
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
@@ -439,6 +519,7 @@ export const CompanyMaster: React.FC = () => {
   });
 
   const totalActive = companies.filter(c => c.isActive).length;
+  const totalInactive = companies.length - totalActive;
   const totalWithCredentials = companies.filter(c => c.adminUserId).length;
 
   return (
@@ -616,45 +697,108 @@ export const CompanyMaster: React.FC = () => {
         </button>
       </div>
 
-      {/* Active Company Filter Bar */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="flex items-center space-x-2 overflow-x-auto pb-1 md:pb-0">
-          <span className="text-xs font-bold text-slate-600 whitespace-nowrap mr-1">Active Entity Context:</span>
-          <button
-            onClick={() => setActiveCompanyId('ALL')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-              activeCompanyId === 'ALL'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            All Companies (Consolidated)
-          </button>
-          {companies.map(comp => (
+      {/* Active Company Filter & Control Bar */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          {/* Active Company Context Switcher */}
+          <div className="flex items-center space-x-2 overflow-x-auto pb-1 lg:pb-0">
+            <span className="text-xs font-bold text-slate-600 whitespace-nowrap mr-1">Active Context:</span>
             <button
-              key={comp.id}
-              onClick={() => setActiveCompanyId(comp.id)}
+              onClick={() => setActiveCompanyId('ALL')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                activeCompanyId === comp.id
+                activeCompanyId === 'ALL'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              {comp.code} • {comp.name.split(' ')[0]}
+              All Companies (Consolidated)
             </button>
-          ))}
+            {companies.map(comp => (
+              <button
+                key={comp.id}
+                onClick={() => setActiveCompanyId(comp.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                  activeCompanyId === comp.id
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {comp.code} • {comp.name.split(' ')[0]}
+              </button>
+            ))}
+          </div>
+
+          {/* Search Bar & Auto-Hide Switch */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAutoHideInactive(!autoHideInactive)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer border ${
+                autoHideInactive
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+              }`}
+              title="When enabled, inactive companies are automatically hidden from the grid"
+            >
+              <span className={`w-2 h-2 rounded-full ${autoHideInactive ? 'bg-indigo-600' : 'bg-slate-300'}`} />
+              <span>Auto-Hide Inactive: {autoHideInactive ? 'ON' : 'OFF'}</span>
+            </button>
+
+            <div className="relative w-full sm:w-56">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search company, CIN, GST..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* Search Bar */}
-        <div className="relative w-full md:w-64">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search company, CIN, GST..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-          />
+        {/* Secondary Visibility Filter Pills */}
+        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-400 font-medium mr-1">Display:</span>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                statusFilter === 'all'
+                  ? 'bg-slate-800 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              All Entities ({companies.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('active')}
+              className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                statusFilter === 'active'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              }`}
+            >
+              Active Only ({totalActive})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('inactive')}
+              className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                statusFilter === 'inactive'
+                  ? 'bg-slate-600 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Inactive / Hidden ({totalInactive})
+            </button>
+          </div>
+
+          <span className="text-[11px] text-slate-400">
+            Showing {filteredCompanies.length} of {companies.length} entities
+          </span>
         </div>
       </div>
 
@@ -673,7 +817,9 @@ export const CompanyMaster: React.FC = () => {
               className={`bg-white rounded-xl border transition-all duration-200 shadow-xs flex flex-col justify-between ${
                 isCurrentActive
                   ? 'border-blue-500 ring-2 ring-blue-500/20'
-                  : 'border-slate-200 hover:border-slate-300'
+                  : comp.isActive
+                  ? 'border-slate-200 hover:border-slate-300'
+                  : 'border-slate-200 bg-slate-50/50 opacity-80'
               }`}
             >
               <div className="p-4 sm:p-5">
@@ -684,15 +830,19 @@ export const CompanyMaster: React.FC = () => {
                       <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-black tracking-wider">
                         {comp.code}
                       </span>
-                      {comp.isActive ? (
-                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold border border-emerald-200 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Active
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold">
-                          Inactive
-                        </span>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleActive(comp)}
+                        title={comp.isActive ? "Click to Hide / Deactivate" : "Click to Unhide / Activate"}
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-colors cursor-pointer ${
+                          comp.isActive
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
+                            : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${comp.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                        {comp.isActive ? 'Active' : 'Hidden / Inactive'}
+                      </button>
                     </div>
                     <h3 className="text-sm font-bold text-slate-900 mt-1.5 leading-snug">{comp.name}</h3>
                     {comp.legalName && (
@@ -714,7 +864,7 @@ export const CompanyMaster: React.FC = () => {
                       id={`btn-delete-company-${comp.id}`}
                       type="button"
                       onClick={() => handleDelete(comp.id, comp.name)}
-                      title="Delete Company"
+                      title="Delete / Hide Company"
                       className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -1345,6 +1495,17 @@ export const CompanyMaster: React.FC = () => {
                   >
                     Cancel
                   </button>
+                  {!editingCompany && (
+                    <button
+                      id="btn-save-and-add-another"
+                      type="button"
+                      onClick={(e) => handleSaveCompany(e, true)}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer border border-slate-300 flex items-center gap-1.5"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Save & Add Another</span>
+                    </button>
+                  )}
                   <button
                     type="submit"
                     className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-xs font-semibold text-white shadow-xs cursor-pointer"
@@ -1359,12 +1520,269 @@ export const CompanyMaster: React.FC = () => {
         </div>
       )}
 
+      {/* Add Multiple Companies Bulk Modal */}
+      {isBulkModalOpen && (
+        <div 
+          id="modal-bulk-companies-backdrop"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+        >
+          <div 
+            id="modal-bulk-companies-container"
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+          >
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">
+                    Add Multiple Companies (Batch Master Registration)
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Register multiple company entities simultaneously into local state, Supabase database, and source code
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBulkModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Mode Switcher & Quick Actions */}
+            <div className="px-5 py-3 bg-slate-50/50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-1.5 bg-slate-200/70 p-1 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setBulkMode('table')}
+                  className={`px-3 py-1.5 rounded-md font-bold transition-all cursor-pointer ${
+                    bulkMode === 'table'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Dynamic Table Editor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkMode('text')}
+                  className={`px-3 py-1.5 rounded-md font-bold transition-all cursor-pointer ${
+                    bulkMode === 'text'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Quick CSV / Text Paste
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoadSampleBulk}
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Load 3 Sample Companies</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearBulkRows}
+                  className="px-2.5 py-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleBulkSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col justify-between space-y-4">
+              {bulkMode === 'table' ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-600">
+                    <span>Fill in the details for each company. Codes and Admin IDs auto-fill as you type.</span>
+                    <span className="font-semibold text-indigo-600">
+                      {bulkRows.filter(r => r.name.trim()).length} of {bulkRows.length} rows ready
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-xs">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                          <th className="py-2.5 px-3 w-10 text-center">#</th>
+                          <th className="py-2.5 px-3 min-w-[200px]">Company Name <span className="text-rose-500">*</span></th>
+                          <th className="py-2.5 px-3 w-28">Short Code</th>
+                          <th className="py-2.5 px-3 w-32">City</th>
+                          <th className="py-2.5 px-3 w-36">Phone Number</th>
+                          <th className="py-2.5 px-3 min-w-[140px]">Admin User ID</th>
+                          <th className="py-2.5 px-3 w-12 text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {bulkRows.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/60">
+                            <td className="py-2 px-3 text-center text-slate-400 font-medium">{idx + 1}</td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                required={idx === 0}
+                                placeholder="e.g. Apex Global Logistics"
+                                value={row.name}
+                                onChange={(e) => handleUpdateBulkRow(idx, 'name', e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                maxLength={6}
+                                placeholder="AGL"
+                                value={row.code}
+                                onChange={(e) => handleUpdateBulkRow(idx, 'code', e.target.value.toUpperCase())}
+                                className="w-full px-2.5 py-1.5 uppercase font-mono font-bold bg-white border border-slate-200 rounded-lg text-xs text-indigo-700 focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                placeholder="Noida"
+                                value={row.city}
+                                onChange={(e) => handleUpdateBulkRow(idx, 'city', e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-700"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                placeholder="+91 98000 00000"
+                                value={row.phone}
+                                onChange={(e) => handleUpdateBulkRow(idx, 'phone', e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-700"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                placeholder="agl.admin"
+                                value={row.adminUserId || ''}
+                                onChange={(e) => handleUpdateBulkRow(idx, 'adminUserId', e.target.value.toLowerCase())}
+                                className="w-full px-2.5 py-1.5 font-mono text-[11px] bg-white border border-slate-200 rounded-lg text-slate-600"
+                              />
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveBulkRow(idx)}
+                                title="Remove Row"
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddBulkRow}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Another Row</span>
+                    </button>
+
+                    <span className="text-[11px] text-slate-500">
+                      Default departments: HR Recruitment, Corporate Operations
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 text-xs text-indigo-900 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5">
+                      <FileCode className="w-4 h-4 text-indigo-600" />
+                      <span>Line Format: Company Name, Code, City, Phone</span>
+                    </div>
+                    <p className="text-[11px] text-indigo-700">
+                      Enter one company per line. Values can be comma-separated. Example:
+                    </p>
+                    <pre className="font-mono text-[11px] bg-white/80 p-2 rounded border border-indigo-200/60 text-slate-800">
+                      Apex Global Logistics Pvt Ltd, AGL, Mumbai, +91 98201 11222{'\n'}
+                      Starlight Retail Ventures Ltd, SRV, Bengaluru, +91 98450 33445{'\n'}
+                      OmniTech Solutions Pvt Ltd, OTS, Hyderabad, +91 98660 55667
+                    </pre>
+                  </div>
+
+                  <textarea
+                    rows={8}
+                    placeholder="Paste lines or CSV here..."
+                    value={bulkText}
+                    onChange={(e) => setBulkText(e.target.value)}
+                    className="w-full p-3 font-mono text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>{bulkText.split('\n').filter(l => l.trim()).length} companies detected in text</span>
+                    <button
+                      type="button"
+                      onClick={() => setBulkText(
+                        "Apex Global Logistics Pvt Ltd, AGL, Mumbai, +91 98201 11222\n" +
+                        "Starlight Retail Ventures Ltd, SRV, Bengaluru, +91 98450 33445\n" +
+                        "OmniTech Solutions Pvt Ltd, OTS, Hyderabad, +91 98660 55667"
+                      )}
+                      className="text-indigo-600 hover:underline cursor-pointer font-semibold"
+                    >
+                      Paste Sample Text
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Modal Footer */}
+              <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
+                <div className="text-xs text-slate-500">
+                  Total entities currently registered: <strong className="text-slate-800">{companies.length}</strong>
+                </div>
+
+                <div className="flex items-center space-x-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkModalOpen(false)}
+                    className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-600 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg text-xs font-bold text-white shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Building2 className="w-4 h-4" />
+                    <span>Register All Companies</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
+
       {/* Standalone Company User ID & Password Master Modal */}
       {isCredentialsMasterOpen && (
         <CompanyCredentialsMasterModal onClose={() => setIsCredentialsMasterOpen(false)} />
       )}
 
-      {/* In-App Delete Company Confirmation Dialog */}
+      {/* In-App Delete / Deactivate Company Confirmation Dialog */}
       {companyToDelete && (
         <div 
           id="modal-delete-company-backdrop"
@@ -1372,7 +1790,7 @@ export const CompanyMaster: React.FC = () => {
         >
           <div 
             id="modal-delete-company-container"
-            className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in duration-200"
+            className="bg-white rounded-xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in duration-200"
           >
             <div className="flex items-start gap-3.5">
               <div className="p-3 rounded-full bg-rose-100 text-rose-600 shrink-0">
@@ -1380,10 +1798,10 @@ export const CompanyMaster: React.FC = () => {
               </div>
               <div className="flex-1">
                 <h3 className="text-base font-bold text-slate-900">
-                  Delete Company Entity
+                  Manage Company Removal / Deactivation
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Are you sure you want to remove <span className="font-semibold text-slate-900">{companyToDelete.name}</span> from the Company Master registry?
+                  Choose how to handle company <span className="font-semibold text-slate-900">{companyToDelete.name}</span> ({companyToDelete.code}):
                 </p>
 
                 <div className="mt-3.5 p-3 bg-slate-50 rounded-lg border border-slate-200/80 text-xs space-y-1.5">
@@ -1403,36 +1821,62 @@ export const CompanyMaster: React.FC = () => {
                       {departmentsList.filter(d => d.companyId === companyToDelete.id).length} department(s)
                     </span>
                   </div>
-                </div>
-
-                {companies.length <= 1 && (
-                  <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2 text-[11px] text-amber-800">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
-                    <span>
-                      Notice: This is the last registered company. If deleted, the registry will be empty until you add another entity.
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Current Status:</span>
+                    <span className={`font-bold ${companyToDelete.isActive ? 'text-emerald-600' : 'text-slate-500'}`}>
+                      {companyToDelete.isActive ? 'Active' : 'Inactive / Hidden'}
                     </span>
                   </div>
-                )}
+                </div>
+
+                <div className="mt-4 space-y-2.5">
+                  <div className="p-2.5 rounded-lg border border-amber-200 bg-amber-50/70 text-amber-900 text-xs flex flex-col gap-1">
+                    <strong className="flex items-center gap-1 font-bold">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> Option 1: Deactivate & Hide (Recommended)
+                    </strong>
+                    <span className="text-[11px] text-amber-800">
+                      Hides the company from active pipelines and job openings, while safely preserving candidate history and existing records.
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg border border-rose-200 bg-rose-50/70 text-rose-900 text-xs flex flex-col gap-1">
+                    <strong className="flex items-center gap-1 font-bold">
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Option 2: Permanently Delete
+                    </strong>
+                    <span className="text-[11px] text-rose-800">
+                      Completely deletes the company record from database and local storage.
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="mt-6 flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2 pt-4 border-t border-slate-100">
               <button
                 id="btn-cancel-delete-company"
                 type="button"
                 onClick={() => setCompanyToDelete(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
               >
                 Cancel
+              </button>
+              <button
+                id="btn-hide-deactivate-company"
+                type="button"
+                onClick={handleConfirmHide}
+                className="px-3.5 py-2 text-xs font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded-lg border border-amber-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Deactivate & Hide</span>
               </button>
               <button
                 id="btn-confirm-delete-company"
                 type="button"
                 onClick={handleConfirmDelete}
-                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Confirm Delete</span>
+                <span>Permanently Delete</span>
               </button>
             </div>
           </div>

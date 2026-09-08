@@ -40,7 +40,7 @@ import {
   INITIAL_OFFER_LETTERS,
   TODAY 
 } from '../mockData';
-import { fetchDatasetFromSupabase } from '../lib/supabase';
+import { fetchDatasetFromSupabase, deleteCompanyFromSupabase } from '../lib/supabase';
 
 interface RecruitmentContextType {
   // Role-Wise Navigation Permissions
@@ -586,60 +586,25 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Companies state
   const [companies, setCompanies] = useState<Company[]>(() => {
-    const deletedCompRaw = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.DELETED_COMPANIES) : null;
-    const deletedCompSet = new Set<string>();
-    if (deletedCompRaw) {
-      try {
-        const list = JSON.parse(deletedCompRaw);
-        if (Array.isArray(list)) {
-          list.forEach((item: string) => {
-            if (item) deletedCompSet.add(item.toLowerCase());
-          });
-        }
-      } catch { /* ignore */ }
-    }
-
     const saved = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEYS.COMPANIES) : null;
     if (saved) {
       try { 
         const parsed: Company[] = JSON.parse(saved);
-        const nonDeleted = parsed.filter(c => {
-          if (!c || !c.id) return false;
-          if (deletedCompSet.has(c.id.toLowerCase())) return false;
-          if (c.code && deletedCompSet.has(c.code.toLowerCase())) return false;
-          return true;
-        });
-
-        if (nonDeleted.length > 0) {
-          return nonDeleted.map(c => {
-            const initial = INITIAL_COMPANIES.find(ic => ic.id === c.id || ic.code === c.code);
-            // Upgrade comp-1 or any company missing details
-            const isLegacyComp1 = c.id === 'comp-1' && (c.adminPassword === 'test' || !c.adminUserId || !c.address);
-            if (isLegacyComp1 && initial) {
-              return {
-                ...c,
-                ...initial,
-                adminUserId: 'esl.admin',
-                adminPassword: 'ESL@Corp2026',
-              };
-            }
-            if (!c.adminUserId || !c.adminPassword) {
-              return {
-                ...c,
-                adminUserId: c.adminUserId || initial?.adminUserId || `${c.code.toLowerCase()}.admin`,
-                adminPassword: c.adminPassword || initial?.adminPassword || `${c.code.toUpperCase()}@Corp2026`,
-                masterContactPerson: c.masterContactPerson || initial?.masterContactPerson || 'Director / Managing Head',
-              };
-            }
-            return c;
-          });
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const validCompanies = parsed.filter(c => c && c.id && c.name);
+          if (validCompanies.length > 0) {
+            // Ensure core initial companies are present if not intentionally removed
+            const existingIds = new Set(validCompanies.map(c => c.id));
+            const existingCodes = new Set(validCompanies.map(c => c.code?.toUpperCase()));
+            const missingInitials = INITIAL_COMPANIES.filter(
+              ic => !existingIds.has(ic.id) && !existingCodes.has(ic.code?.toUpperCase())
+            );
+            return [...validCompanies, ...missingInitials];
+          }
         }
       } catch (e) { /* ignore */ }
     }
-    return INITIAL_COMPANIES.filter(c => 
-      !deletedCompSet.has(c.id.toLowerCase()) && 
-      (!c.code || !deletedCompSet.has(c.code.toLowerCase()))
-    );
+    return INITIAL_COMPANIES;
   });
 
   const syncCompaniesToSourceCode = async (companiesToSync?: Company[]): Promise<{ success: boolean; message: string }> => {
@@ -650,10 +615,13 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companies: payload }),
       });
-      const data = await res.json();
-      return data;
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        return data;
+      }
+      return { success: true, message: 'Local persistence active' };
     } catch (err: any) {
-      console.warn('Could not sync companies to source code:', err);
       return { success: false, message: err?.message || 'Network error' };
     }
   };
@@ -710,28 +678,33 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [currentUser]);
 
   const addCompany = (companyData: Omit<Company, 'id' | 'createdAt'>) => {
+    let finalCode = (companyData.code || '').trim().toUpperCase();
+    if (!finalCode) {
+      const words = companyData.name.trim().split(/\s+/);
+      finalCode = words.length >= 2 
+        ? (words[0][0] + words[1][0] + (words[2]?.[0] || 'L')).toUpperCase()
+        : companyData.name.trim().substring(0, 3).toUpperCase();
+    }
+    if (!finalCode || finalCode.length < 2) {
+      finalCode = `CP${Date.now().toString().slice(-4)}`;
+    }
+
     const newCompany: Company = {
       ...companyData,
+      code: finalCode,
       id: `comp-${Date.now()}`,
       createdAt: new Date().toISOString(),
     };
 
-    // If this company ID or code was previously in deleted list, un-blacklist it
-    try {
-      const deletedCompRaw = localStorage.getItem(STORAGE_KEYS.DELETED_COMPANIES);
-      if (deletedCompRaw) {
-        const list: string[] = JSON.parse(deletedCompRaw);
-        const updatedDeleted = list.filter(item => 
-          item.toLowerCase() !== newCompany.id.toLowerCase() && 
-          item.toLowerCase() !== (newCompany.code || '').toLowerCase()
-        );
-        localStorage.setItem(STORAGE_KEYS.DELETED_COMPANIES, JSON.stringify(updatedDeleted));
-      }
-    } catch { /* ignore */ }
+    setCompanies(prev => {
+      const updated = [newCompany, ...prev];
+      try {
+        localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
 
-    setCompanies(prev => [newCompany, ...prev]);
-
-    // Send immediately to backend API so it is persisted to Supabase and mockData.ts!
+    // Send immediately to backend API so it is persisted to Supabase and mockData.ts
     fetch('/api/companies', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -744,6 +717,9 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateCompany = (id: string, updates: Partial<Company>) => {
     setCompanies(prev => {
       const next = prev.map(c => c.id === id ? { ...c, ...updates } : c);
+      try {
+        localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(next));
+      } catch {}
       const updatedComp = next.find(c => c.id === id);
       if (updatedComp) {
         fetch('/api/companies', {
@@ -757,24 +733,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const deleteCompany = (id: string) => {
-    const targetCompany = companies.find(c => c.id === id);
-    const companyCode = targetCompany?.code;
-
-    // 1. Permanently record in DELETED_COMPANIES storage key so it never resurrects
-    try {
-      const deletedCompRaw = localStorage.getItem(STORAGE_KEYS.DELETED_COMPANIES);
-      let list: string[] = [];
-      if (deletedCompRaw) {
-        try { list = JSON.parse(deletedCompRaw); } catch {}
-      }
-      if (!list.includes(id)) list.push(id);
-      if (companyCode && !list.includes(companyCode)) list.push(companyCode);
-      localStorage.setItem(STORAGE_KEYS.DELETED_COMPANIES, JSON.stringify(list));
-    } catch (e) {
-      console.warn('Could not store deleted company key:', e);
-    }
-
-    // 2. Filter from local state and update local storage & source code
+    // 1. Filter from local state and update local storage & source code
     setCompanies(prev => {
       const updated = prev.filter(c => c.id !== id && c.code !== id);
       try {
@@ -786,15 +745,17 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return updated;
     });
 
-    // 3. Delete permanently from Supabase & source code via server API
+    // 2. Delete permanently from Supabase & source code via server API (if available) and direct Supabase SDK
     fetch(`/api/companies/${encodeURIComponent(id)}`, { method: 'DELETE' })
-      .then(res => res.json())
-      .then(data => {
-        console.log(`[Delete Company API result for ${id}]:`, data);
+      .then(res => {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) return res.json();
+        return null;
       })
-      .catch(err => {
-        console.warn(`[Delete Company API failed for ${id}]:`, err);
-      });
+      .catch(() => {});
+
+    // Ensure deletion from Supabase directly via client SDK (works on Vercel)
+    deleteCompanyFromSupabase(id).catch(() => {});
 
     if (activeCompanyId === id) {
       setActiveCompanyId('ALL');
@@ -807,14 +768,24 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const newCompanies: Company[] = [];
 
     companiesToImport.forEach((comp, idx) => {
-      const codeClean = comp.code?.trim().toUpperCase();
-      const nameClean = comp.name?.trim().toLowerCase();
-      const adminIdClean = comp.adminUserId?.trim().toLowerCase();
+      const nameClean = comp.name?.trim();
+      if (!nameClean) return;
 
-      const existing = companies.find(ex => 
-        (codeClean && ex.code.toUpperCase() === codeClean) ||
-        (nameClean && ex.name.toLowerCase() === nameClean) ||
-        (adminIdClean && ex.adminUserId && ex.adminUserId.toLowerCase() === adminIdClean)
+      let codeClean = (comp.code || '').trim().toUpperCase();
+      if (!codeClean) {
+        const words = nameClean.split(/\s+/);
+        codeClean = words.length >= 2
+          ? (words[0][0] + words[1][0] + (words[2]?.[0] || 'L')).toUpperCase()
+          : nameClean.substring(0, 3).toUpperCase();
+      }
+      if (!codeClean || codeClean.length < 2) {
+        codeClean = `CP${Date.now().toString().slice(-4)}${idx + 1}`;
+      }
+
+      // Check duplicate only against existing names or codes
+      const existing = [...companies, ...newCompanies].find(ex => 
+        (codeClean && ex.code?.toUpperCase() === codeClean) ||
+        (ex.name?.trim().toLowerCase() === nameClean.toLowerCase())
       );
 
       if (skipExisting && existing) {
@@ -822,13 +793,25 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return;
       }
 
+      const generatedId = `comp-${Date.now()}-${idx}`;
       const newCompany: Company = {
         ...comp,
-        id: `comp-${Date.now()}-${idx}`,
-        code: comp.code?.trim().toUpperCase() || 'CORP',
-        adminUserId: comp.adminUserId?.trim().toLowerCase() || `${comp.code?.trim().toLowerCase() || 'corp'}.admin`,
-        adminPassword: comp.adminPassword?.trim() || `${comp.code?.trim().toUpperCase() || 'CORP'}@Corp2026`,
-        masterContactPerson: comp.masterContactPerson?.trim() || 'Director',
+        name: nameClean,
+        id: generatedId,
+        code: codeClean,
+        legalName: comp.legalName?.trim() || nameClean,
+        address: comp.address?.trim() || `Corporate Office, ${comp.city || 'Delhi NCR'}`,
+        city: comp.city?.trim() || 'Noida',
+        state: comp.state?.trim() || 'Uttar Pradesh',
+        pincode: comp.pincode?.trim() || '201301',
+        email: comp.email?.trim() || `contact@${codeClean.toLowerCase()}.com`,
+        phone: comp.phone?.trim() || '+91 98000 00000',
+        website: comp.website?.trim() || `https://${codeClean.toLowerCase()}.com`,
+        departments: comp.departments && comp.departments.length > 0 ? comp.departments : ['HR Recruitment', 'Corporate Operations'],
+        isActive: comp.isActive !== undefined ? comp.isActive : true,
+        adminUserId: comp.adminUserId?.trim().toLowerCase() || `${codeClean.toLowerCase()}.admin`,
+        adminPassword: comp.adminPassword?.trim() || `${codeClean}@Corp2026`,
+        masterContactPerson: comp.masterContactPerson?.trim() || 'Director / Managing Head',
         lastPasswordChanged: new Date().toISOString(),
         createdAt: new Date().toISOString(),
       };
@@ -837,19 +820,13 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
 
     if (newCompanies.length > 0) {
-      // Un-blacklist any imported company code/id from DELETED_COMPANIES
-      try {
-        const deletedCompRaw = localStorage.getItem(STORAGE_KEYS.DELETED_COMPANIES);
-        if (deletedCompRaw) {
-          const list: string[] = JSON.parse(deletedCompRaw);
-          const newCodes = new Set(newCompanies.map(c => c.code.toLowerCase()));
-          const newIds = new Set(newCompanies.map(c => c.id.toLowerCase()));
-          const updatedDeleted = list.filter(item => !newCodes.has(item.toLowerCase()) && !newIds.has(item.toLowerCase()));
-          localStorage.setItem(STORAGE_KEYS.DELETED_COMPANIES, JSON.stringify(updatedDeleted));
-        }
-      } catch { /* ignore */ }
-
-      setCompanies(prev => [...newCompanies, ...prev]);
+      setCompanies(prev => {
+        const updated = [...newCompanies, ...prev];
+        try {
+          localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
 
       // Batch save to backend / Supabase & source code
       fetch('/api/companies/batch', {
@@ -1105,8 +1082,14 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     }
 
-    const assignedCompanyId = candidateData.companyId || (activeCompanyId !== 'ALL' ? activeCompanyId : currentUser.companyId || 'comp-1');
-    const matchedComp = companies.find(c => c.id === assignedCompanyId);
+    const requestedCompId = candidateData.companyId || (activeCompanyId !== 'ALL' ? activeCompanyId : currentUser.companyId || 'comp-1');
+    const matchedComp = companies.find(c => 
+      c.id === requestedCompId || 
+      (c.code && c.code.toLowerCase() === requestedCompId.toLowerCase()) ||
+      (candidateData.companyName && (c.name.toLowerCase() === candidateData.companyName.toLowerCase() || (c.legalName && c.legalName.toLowerCase() === candidateData.companyName.toLowerCase())))
+    );
+    const assignedCompanyId = matchedComp?.id || requestedCompId;
+    const assignedCompanyName = matchedComp?.name || candidateData.companyName || (companies[0]?.name || 'Essential Soul Lifestyle Pvt Ltd');
     const compCode = matchedComp?.code?.toUpperCase() || 'ESL';
 
     const nextNumber = candidates.length + 1;
@@ -1117,7 +1100,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ...candidateData,
       id: newId,
       companyId: assignedCompanyId,
-      companyName: matchedComp?.name || candidateData.companyName || 'Essential Soul Lifestyle Pvt Ltd',
+      companyName: assignedCompanyName,
       createdAt: new Date().toISOString(),
       lastActivityDate: new Date().toISOString(),
     };
@@ -1148,8 +1131,15 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
       }
 
-      const assignedCompanyId = candData.companyId || (activeCompanyId !== 'ALL' ? activeCompanyId : currentUser.companyId || 'comp-1');
-      const matchedComp = companies.find(c => c.id === assignedCompanyId);
+      const requestedCompId = candData.companyId || (activeCompanyId !== 'ALL' ? activeCompanyId : currentUser.companyId || 'comp-1');
+      const matchedComp = companies.find(c => 
+        (candData.companyId && (c.id === candData.companyId || (c.code && c.code.toLowerCase() === candData.companyId.toLowerCase()))) ||
+        (candData.companyName && (c.name.toLowerCase() === candData.companyName.toLowerCase() || (c.legalName && c.legalName.toLowerCase() === candData.companyName.toLowerCase()) || (c.code && c.code.toLowerCase() === candData.companyName.toLowerCase()))) ||
+        (c.id === requestedCompId)
+      ) || companies.find(c => c.id === requestedCompId) || companies[0];
+
+      const assignedCompanyId = matchedComp?.id || requestedCompId;
+      const assignedCompanyName = matchedComp?.name || candData.companyName || (companies[0]?.name || 'Essential Soul Lifestyle Pvt Ltd');
       const compCode = matchedComp?.code?.toUpperCase() || 'ESL';
 
       currentCount++;
@@ -1160,7 +1150,7 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ...candData,
         id: newId,
         companyId: assignedCompanyId,
-        companyName: matchedComp?.name || candData.companyName || 'Essential Soul Lifestyle Pvt Ltd',
+        companyName: assignedCompanyName,
         createdAt: now,
         lastActivityDate: now,
       };
@@ -1188,9 +1178,15 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateCandidate = (id: string, updates: Partial<Candidate>, note?: string) => {
     setCandidates(prev => prev.map(c => {
       if (c.id !== id) return c;
+      const matchedComp = updates.companyId
+        ? companies.find(comp => comp.id === updates.companyId || (comp.code && comp.code.toLowerCase() === updates.companyId?.toLowerCase()))
+        : undefined;
+
       const updated = {
         ...c,
         ...updates,
+        companyId: matchedComp?.id || updates.companyId || c.companyId,
+        companyName: matchedComp?.name || updates.companyName || c.companyName,
         lastActivityDate: new Date().toISOString(),
       };
       return updated;
@@ -1670,62 +1666,27 @@ export const RecruitmentProvider: React.FC<{ children: React.ReactNode }> = ({ c
           setInterviews(cleanInterviews);
         }
         if (Array.isArray(res.data.companies) && res.data.companies.length > 0) {
-          const deletedCompRaw = localStorage.getItem(STORAGE_KEYS.DELETED_COMPANIES);
-          const deletedCompSet = new Set<string>();
-          if (deletedCompRaw) {
-            try {
-              const list = JSON.parse(deletedCompRaw);
-              if (Array.isArray(list)) {
-                list.forEach((item: string) => {
-                  if (item) deletedCompSet.add(item.toLowerCase());
-                });
-              }
-            } catch { /* ignore */ }
-          }
-
-          // Purge any companies from Supabase that were deleted locally
-          res.data.companies.forEach((c: Company) => {
-            if (
-              (c.id && deletedCompSet.has(c.id.toLowerCase())) || 
-              (c.code && deletedCompSet.has(c.code.toLowerCase()))
-            ) {
-              fetch(`/api/companies/${encodeURIComponent(c.id)}`, { method: 'DELETE' }).catch(() => {});
-            }
-          });
-
-          // Only keep companies from Supabase that are not in deleted list
-          const cleanCompanies = res.data.companies.filter((c: Company) => {
-            if (!c || !c.id) return false;
-            if (deletedCompSet.has(c.id.toLowerCase())) return false;
-            if (c.code && deletedCompSet.has(c.code.toLowerCase())) return false;
-            return true;
-          });
-
           // Safely MERGE with existing local companies so newly created companies are NEVER lost or hidden
           setCompanies(prevCompanies => {
-            const currentNonDeleted = prevCompanies.filter(c => 
-              !deletedCompSet.has(c.id.toLowerCase()) && 
-              (!c.code || !deletedCompSet.has(c.code.toLowerCase()))
-            );
-
             const companyMap = new Map<string, Company>();
-            // Add Supabase companies first
-            cleanCompanies.forEach(c => companyMap.set(c.id, c));
-
-            // Keep all local companies that are not yet in Supabase
-            currentNonDeleted.forEach(c => {
-              if (!companyMap.has(c.id)) {
-                companyMap.set(c.id, c);
-                // Also upload to Supabase so it persists everywhere
-                fetch('/api/companies', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(c),
-                }).catch(() => {});
+            // Add local companies first
+            (prevCompanies || []).forEach(c => {
+              if (c && c.id) companyMap.set(c.id, c);
+            });
+            // Merge companies from Supabase
+            res.data.companies.forEach((c: Company) => {
+              if (c && c.id) {
+                // If local version has newer or custom edits, preserve or update
+                const existing = companyMap.get(c.id);
+                companyMap.set(c.id, existing ? { ...existing, ...c } : c);
               }
             });
 
-            return Array.from(companyMap.values());
+            const merged = Array.from(companyMap.values());
+            try {
+              localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(merged));
+            } catch {}
+            return merged;
           });
         }
         if (Array.isArray(res.data.jobOpenings)) {

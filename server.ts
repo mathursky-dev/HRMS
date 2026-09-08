@@ -8,7 +8,8 @@ const PORT = 3000;
 const CONFIG_FILE = path.join(process.cwd(), '.supabase-config.json');
 
 const DEFAULT_SUPABASE_URL = 'https://snvgarluywefmlsimikf.supabase.co';
-const DEFAULT_SUPABASE_KEY = 'sb_secret_D32T4_vaOP_1qkDE5TYpgg_T5PnlF9m';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODU5NTM4NywiZXhwIjoyMTA0MTcxMzg3fQ.o9rTQB_rbBYfWAxRf3h1cDA7vKBpCBEXMjAhFrH8U1Y';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNudmdhcmx1eXdlZm1sc2ltaWtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1OTUzODcsImV4cCI6MjEwNDE3MTM4N30.yXUxN8bSlNciLCHW_yAS5ioOFoZpkqi4nS2D5wl4cVo';
 
 function normalizeUrl(input: string): string {
   if (!input) return '';
@@ -43,19 +44,29 @@ function normalizeKey(input: string): string {
   str = str.replace(/^["']|["']$/g, '').trim();
   str = str.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
 
-  // If multiple tokens are pasted together, pick the secret or service_role/anon token
+  // Supabase REST API requires a signed JWT (starts with eyJ).
+  // If the string contains a JWT, extract it cleanly:
+  const jwtMatch = str.match(/\b(eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\b/);
+  if (jwtMatch) {
+    return jwtMatch[1];
+  }
+
+  // If input contains whitespace/newlines, inspect tokens
   if (str.includes(' ') || str.includes('\n')) {
     const tokens = str.split(/\s+/);
-    const foundSecret = tokens.find(t => t.includes('sb_secret_'));
-    if (foundSecret) {
-      return foundSecret.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
-    }
     const foundJwt = tokens.find(t => t.includes('eyJ'));
     if (foundJwt) {
       return foundJwt.replace(/^[A-Z0-9_]+=\s*/i, '').replace(/^["']|["']$/g, '').trim();
     }
-    return tokens[0].trim();
   }
+
+  // If an "sb_secret_..." or unrecognized auth token was supplied, Supabase REST API will reject it with "Unregistered API key".
+  // Safely fall back to the registered service role or anon key.
+  if (str.startsWith('sb_secret_')) {
+    console.warn('[Supabase Config] Detected sb_secret_ token instead of REST API key. Falling back to service_role JWT key.');
+    return process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_KEY;
+  }
+
   return str;
 }
 
@@ -314,32 +325,6 @@ async function startServer() {
     });
   });
 
-  // Clear demo and dummy records from Supabase tables
-  app.post('/api/supabase/clear-demo', async (req, res) => {
-    const client = supabaseClient;
-    if (!client) {
-      return res.status(500).json({ success: false, error: 'Supabase client not initialized' });
-    }
-
-    try {
-      // 1. Delete test interviews
-      await client.from('interviews').delete().like('id', 'test-%');
-      // 2. Delete test follow ups
-      await client.from('follow_ups').delete().like('id', 'test-%');
-      // 3. Delete test offer letters
-      await client.from('offer_letters').delete().or('id.like.off-test%,id.like.OFR-2026-%');
-      // 4. Delete test candidates (TEST-2026-* or remarks like TEST DATA)
-      await client.from('candidates').delete().like('id', 'TEST-%');
-      await client.from('candidates').delete().ilike('remarks', '%TEST DATA%');
-      // 5. Delete test job openings (job-1, job-2, etc. and job-test)
-      await client.from('job_openings').delete().like('id', 'job-%');
-
-      return res.json({ success: true, message: 'Demo data cleared from Supabase' });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err?.message || 'Failed to clear demo data' });
-    }
-  });
-
   // 4. Sync CRM Data to Supabase via Server-side Upsert
   app.post('/api/supabase/sync', async (req, res) => {
     const client = supabaseClient;
@@ -362,35 +347,10 @@ async function startServer() {
       targetSettings = [],
       termsClauses = [],
       auditLogs = [],
-      deletedCompanyIds = [],
     } = req.body || {};
 
     const syncedCounts: Record<string, number> = {};
     const errors: string[] = [];
-
-    // If deleted companies are specified, purge them from Supabase first
-    if (Array.isArray(deletedCompanyIds) && deletedCompanyIds.length > 0 && client) {
-      for (const compId of deletedCompanyIds) {
-        if (!compId) continue;
-        try {
-          await client.from('departments').update({ company_id: null }).eq('company_id', compId);
-          await client.from('users').update({ company_id: null }).eq('company_id', compId);
-          await client.from('candidates').update({ company_id: null }).eq('company_id', compId);
-          await client.from('job_openings').update({ company_id: null }).eq('company_id', compId);
-          await client.from('offer_letters').update({ company_id: null }).eq('company_id', compId);
-          await client.from('target_settings').update({ company_id: null }).eq('company_id', compId);
-          await client.from('companies').delete().eq('id', compId);
-          await client.from('companies').delete().eq('code', compId);
-          console.log(`[Supabase Sync] Purged deleted company ${compId} from database.`);
-        } catch (delErr: any) {
-          console.warn(`[Supabase Sync] Warning purging deleted company ${compId}:`, delErr?.message);
-        }
-      }
-    }
-
-    // Track valid IDs for relational integrity
-    const validCompanyIds = new Set<string>();
-    const validCandidateIds = new Set<string>();
 
     // Conversion helpers between TypeScript CRM interfaces and Supabase PostgreSQL schema
     function companyToDb(c: any) {
@@ -399,23 +359,23 @@ async function startServer() {
         id: c.id,
         name: c.name || '',
         code: c.code || '',
-        legal_name: c.legalName || c.legal_name || null,
+        legal_name: c.legalName || c.legal_name || c.name || '',
         cin: c.cin || null,
         gstin: c.gstin || null,
         address: c.address || '',
-        city: c.city || '',
-        state: c.state || '',
-        pincode: c.pincode || null,
+        city: c.city || 'Noida',
+        state: c.state || 'Uttar Pradesh',
+        pincode: c.pincode || '201301',
         phone: c.phone || '',
         email: c.email || '',
         logo_url: c.logoUrl || c.logo_url || null,
         website: c.website || null,
-        departments: Array.isArray(c.departments) ? c.departments : [],
+        departments: Array.isArray(c.departments) ? c.departments : ['HR Recruitment'],
         is_active: Boolean(c.isActive ?? c.is_active ?? true),
-        admin_user_id: c.adminUserId || c.admin_user_id || null,
-        admin_password: c.adminPassword || c.admin_password || null,
-        master_contact_person: c.masterContactPerson || c.master_contact_person || null,
-        last_password_changed: c.lastPasswordChanged || c.last_password_changed || null,
+        admin_user_id: c.adminUserId || c.admin_user_id || `${(c.code || 'comp').toLowerCase()}.admin`,
+        admin_password: c.adminPassword || c.admin_password || `${c.code || 'ESL'}@Corp2026`,
+        master_contact_person: c.masterContactPerson || c.master_contact_person || 'Director / Managing Head',
+        last_password_changed: c.lastPasswordChanged || c.last_password_changed || new Date().toISOString(),
         created_at: c.createdAt || c.created_at || new Date().toISOString(),
         updated_at: c.updatedAt || c.updated_at || new Date().toISOString(),
       };
@@ -423,70 +383,63 @@ async function startServer() {
 
     function departmentToDb(d: any) {
       if (!d) return null;
-      const compId = d.companyId || d.company_id || null;
       return {
         id: d.id,
         name: d.name || '',
         code: d.code || '',
         description: d.description || null,
-        company_id: (compId && !validCompanyIds.has(compId)) ? null : compId,
+        company_id: d.companyId || d.company_id || null,
         head_of_department: d.headName || d.head_of_department || null,
         target_hires: d.targetHires ?? d.target_hires ?? d.dailyInterviewTarget ?? 0,
         current_employees: d.currentEmployees ?? d.current_employees ?? 0,
-        is_active: Boolean(d.isActive ?? d.is_active ?? true),
         created_at: d.createdAt || d.created_at || new Date().toISOString(),
       };
     }
 
     function userToDb(u: any) {
       if (!u) return null;
-      const compId = u.companyId || u.company_id || null;
       return {
         id: u.id,
+        user_id: u.userId || u.user_id || u.email || '',
         name: u.name || '',
         email: u.email || '',
         phone: u.phone || null,
-        role: u.role || 'HR Executive',
+        role: u.role || 'Recruiter',
         department: u.department || 'HR Recruitment',
-        company_id: (compId && !validCompanyIds.has(compId)) ? null : compId,
-        company_name: u.companyName || u.company_name || null,
-        user_id: u.userId || u.user_id || null,
-        password: u.password || null,
-        daily_interview_target: u.dailyInterviewTarget ?? u.daily_interview_target ?? 10,
-        monthly_active_joining_target: u.monthlyActiveJoiningTarget ?? u.monthly_active_joining_target ?? 20,
+        company_id: u.companyId || u.company_id || null,
         status: u.status || 'Active',
-        avatar_url: u.avatar || u.avatar_url || null,
+        assigned_target_joinings: u.assignedTargetJoinings ?? u.assigned_target_joinings ?? 15,
+        min_calling_target_per_day: u.minCallingTargetPerDay ?? u.min_calling_target_per_day ?? 60,
+        daily_interview_target: u.dailyInterviewTarget ?? u.daily_interview_target ?? 5,
         created_at: u.createdAt || u.created_at || new Date().toISOString(),
-        updated_at: u.updatedAt || u.updated_at || new Date().toISOString(),
       };
     }
 
     function candidateToDb(c: any) {
       if (!c) return null;
-      const compId = c.companyId || c.company_id || null;
       return {
         id: c.id,
         full_name: c.fullName || c.full_name || '',
         mobile_number: c.mobileNumber || c.mobile_number || '',
         whatsapp_number: c.whatsappNumber || c.whatsapp_number || c.mobileNumber || '',
         gender: c.gender || null,
-        age: c.age !== undefined && c.age !== null ? Number(c.age) : null,
+        age: c.age || null,
         date_of_birth: c.dateOfBirth || c.date_of_birth || null,
         email: c.email || null,
         city: c.city || null,
         area: c.area || null,
         address: c.address || null,
         position_applied: c.positionApplied || c.position_applied || '',
-        department: c.department || 'HR Recruitment',
-        company_id: (compId && !validCompanyIds.has(compId)) ? null : compId,
+        department: c.department || '',
+        company_id: c.companyId || c.company_id || null,
         company_name: c.companyName || c.company_name || null,
         qualification: c.qualification || null,
         total_experience: c.totalExperience || c.total_experience || null,
         relevant_experience: c.relevantExperience || c.relevant_experience || null,
         current_company: c.currentCompany || c.current_company || null,
-        current_salary: c.currentSalary !== undefined && c.currentSalary !== null ? Number(c.currentSalary) : null,
-        expected_salary: c.expectedSalary !== undefined && c.expectedSalary !== null ? Number(c.expectedSalary) : null,
-        salary_offered: c.salaryOffered !== undefined && c.salaryOffered !== null ? Number(c.salaryOffered) : null,
+        current_salary: c.currentSalary !== undefined ? c.currentSalary : (c.current_salary || null),
+        expected_salary: c.expectedSalary !== undefined ? c.expectedSalary : (c.expected_salary || null),
+        salary_offered: c.salaryOffered !== undefined ? c.salaryOffered : (c.salary_offered || null),
         notice_period: c.noticePeriod || c.notice_period || null,
         preferred_location: c.preferredLocation || c.preferred_location || null,
         candidate_source: c.candidateSource || c.candidate_source || 'Indeed',
@@ -498,9 +451,6 @@ async function startServer() {
         joining_date: c.joiningDate || c.joining_date || null,
         interview_date: c.interviewDate || c.interview_date || null,
         offer_letter_issued: Boolean(c.offerLetterIssued ?? c.offer_letter_issued),
-        is_locked: Boolean(c.isLocked ?? c.is_locked),
-        locked_by: c.lockedBy || c.locked_by || null,
-        locked_at: c.lockedAt || c.locked_at || null,
         first_call_date: c.firstCallDate || c.first_call_date || null,
         last_activity_date: c.lastActivityDate || c.last_activity_date || new Date().toISOString(),
         created_at: c.createdAt || c.created_at || new Date().toISOString(),
@@ -510,41 +460,31 @@ async function startServer() {
 
     function jobOpeningToDb(j: any) {
       if (!j) return null;
-      const compId = j.companyId || j.company_id || null;
       return {
         id: j.id,
-        title: j.jobTitle || j.title || 'Recruitment Opening',
+        title: j.title || '',
         department: j.department || 'HR Recruitment',
-        company_id: (compId && !validCompanyIds.has(compId)) ? null : compId,
-        positions: j.vacancies ?? j.positions ?? 1,
-        experience_min: j.experienceMin ?? j.experience_min ?? 0,
-        experience_max: j.experienceMax ?? j.experience_max ?? 5,
-        salary_min: j.salaryMin ?? j.salary_min ?? null,
-        salary_max: j.salaryMax ?? j.salary_max ?? null,
-        location: j.jobLocation || j.location || 'Head Office',
-        job_type: j.jobType || j.job_type || 'Full-Time',
-        description: j.description || `Job opening for ${j.jobTitle || j.title || 'role'}`,
-        requirements: j.requirements || j.experience || null,
-        status: j.status === 'Open' || j.status === 'Urgent' ? 'Active' : (j.status || 'Active'),
-        posted_date: j.postedDate || j.posted_date || new Date().toISOString().split('T')[0],
-        closing_date: j.hiringDeadline || j.closing_date || null,
+        company_id: j.companyId || j.company_id || null,
+        company_name: j.companyName || j.company_name || null,
+        positions_count: j.positionsCount ?? j.positions_count ?? 1,
+        experience_required: j.experienceRequired || j.experience_required || null,
+        location: j.location || 'Noida',
+        salary_range: j.salaryRange || j.salary_range || null,
+        status: j.status || 'Open',
+        description: j.description || null,
         created_at: j.createdAt || j.created_at || new Date().toISOString(),
       };
     }
 
     function followUpToDb(f: any) {
       if (!f) return null;
-      const candId = f.candidateId || f.candidate_id || null;
-      if (candId && !validCandidateIds.has(candId)) {
-        return null;
-      }
       return {
         id: f.id,
-        candidate_id: candId,
-        scheduled_date: f.followUpDate || f.scheduled_date || new Date().toISOString().split('T')[0],
+        candidate_id: f.candidateId || f.candidate_id,
+        scheduled_date: f.followUpDate || f.scheduled_date,
         scheduled_time: f.followUpTime || f.scheduled_time || '11:00',
         type: f.followUpMode || f.type || 'Call',
-        notes: f.candidateResponse || f.notes || '',
+        notes: f.notes || f.candidateResponse || '',
         completed: Boolean(f.isCompleted ?? f.completed),
         conducted_by: f.hrExecutive || f.conducted_by || 'Nandani',
         outcome: f.resultingStatus || f.outcome || 'Follow-up',
@@ -555,21 +495,17 @@ async function startServer() {
 
     function interviewToDb(i: any) {
       if (!i) return null;
-      const candId = i.candidateId || i.candidate_id || null;
-      if (candId && !validCandidateIds.has(candId)) {
-        return null;
-      }
       return {
         id: i.id,
-        candidate_id: candId,
+        candidate_id: i.candidateId || i.candidate_id,
         candidate_name: i.candidateName || i.candidate_name || '',
         candidate_phone: i.candidateMobile || i.candidate_phone || '',
         candidate_role: i.position || i.candidate_role || '',
-        scheduled_date: i.interviewDate || i.scheduled_date || new Date().toISOString().split('T')[0],
+        scheduled_date: i.interviewDate || i.scheduled_date,
         scheduled_time: i.interviewTime || i.scheduled_time || '11:00',
-        round: i.round || 'Round 1 (HR Screening)',
+        round: i.round || 'Initial Round',
         interviewer_name: i.interviewer || i.interviewer_name || 'Vikram Singh',
-        interviewer_role: i.interviewerRole || i.interviewer_role || 'Interviewer',
+        interviewer_role: i.interviewer_role || 'Interviewer',
         status: i.attendanceStatus || i.status || 'Scheduled',
         attendance_status: i.attendanceStatus || i.attendance_status || 'Scheduled',
         evaluation: i.evaluation || null,
@@ -580,20 +516,18 @@ async function startServer() {
 
     function offerLetterToDb(o: any) {
       if (!o) return null;
-      const candId = o.candidateId || o.candidate_id || null;
-      const compId = o.companyId || o.company_id || null;
       return {
         id: o.id,
-        candidate_id: (candId && !validCandidateIds.has(candId)) ? null : candId,
+        candidate_id: o.candidateId || o.candidate_id || null,
         candidate_name: o.candidateName || o.candidate_name || '',
         candidate_email: o.candidateEmail || o.candidate_email || '',
         candidate_phone: o.candidatePhone || o.candidate_phone || '',
-        company_id: (compId && !validCompanyIds.has(compId)) ? null : compId,
+        company_id: o.companyId || o.company_id || null,
         company_name: o.companyName || o.company_name || '',
         department: o.department || '',
         designation: o.designation || 'Staff',
         annual_ctc: o.annualCtc !== undefined && o.annualCtc !== null ? Number(o.annualCtc) : (o.annual_ctc ? Number(o.annual_ctc) : 0),
-        monthly_gross: o.monthlyGross !== undefined && o.monthlyGross !== null ? Number(o.monthlyGross) : (o.monthly_gross ? Number(o.monthly_gross) : null),
+        monthly_gross: o.monthlyGross !== undefined && o.monthlyGross !== null ? Number(o.monthlyGross) : null,
         basic_salary: o.basicSalary !== undefined && o.basicSalary !== null ? Number(o.basicSalary) : null,
         hra: o.hra !== undefined && o.hra !== null ? Number(o.hra) : null,
         special_allowance: o.specialAllowance !== undefined && o.specialAllowance !== null ? Number(o.specialAllowance) : null,
@@ -613,12 +547,12 @@ async function startServer() {
       if (!t) return null;
       return {
         id: t.id,
-        role: t.targetEntityName || t.role || t.metric || 'HR Executive',
+        role: t.role || '',
         department: t.department || 'HR Recruitment',
         company_id: t.companyId || t.company_id || null,
-        daily_interviews: t.daily_interviews ?? (typeof t.targetValue === 'number' && String(t.metric).includes('Interview') ? t.targetValue : 8),
-        monthly_active_joinings: t.monthly_active_joinings ?? (typeof t.targetValue === 'number' && String(t.metric).includes('Joining') ? t.targetValue : (t.minimumBenchmark ?? 15)),
-        min_calling_per_day: t.min_calling_per_day ?? (typeof t.targetValue === 'number' && String(t.metric).includes('Calling') ? t.targetValue : (t.minCallingPerDay ?? 60)),
+        daily_interviews: t.dailyInterviews ?? t.daily_interviews ?? 5,
+        monthly_active_joinings: t.monthlyActiveJoinings ?? t.monthly_active_joinings ?? 4,
+        min_calling_per_day: t.minCallingPerDay ?? t.min_calling_per_day ?? 60,
         updated_at: t.updatedAt || t.updated_at || new Date().toISOString(),
       };
     }
@@ -637,65 +571,38 @@ async function startServer() {
       };
     }
 
-    function auditLogToDb(a: any) {
-      if (!a) return null;
-      return {
-        id: a.id,
-        timestamp: a.timestamp || new Date().toISOString(),
-        user_id: a.performedBy || a.user_id || 'System',
-        user_name: a.performedBy || a.user_name || 'System Admin',
-        user_role: a.userRole || a.user_role || 'Admin',
-        action: a.action || 'Updated',
-        entity_type: a.entityType || a.entity_type || 'Candidate',
-        entity_id: a.candidateId || a.entity_id || a.id,
-        details: a.details || a.candidateName || null,
-        ip_address: a.ipAddress || a.ip_address || '127.0.0.1',
-      };
-    }
-
-    async function upsertBatch(tableName: string, rows: any[], chunkSize: number = 50) {
+    async function upsertBatch(tableName: string, rows: any[]) {
       if (!rows || rows.length === 0) return;
       try {
-        let transformedRows: any[] = [];
+        let transformedRows = rows;
         if (tableName === 'companies') {
           transformedRows = rows.map(companyToDb).filter(Boolean);
-          transformedRows.forEach((c: any) => { if (c?.id) validCompanyIds.add(c.id); });
         } else if (tableName === 'departments') {
           transformedRows = rows.map(departmentToDb).filter(Boolean);
         } else if (tableName === 'users') {
           transformedRows = rows.map(userToDb).filter(Boolean);
         } else if (tableName === 'candidates') {
           transformedRows = rows.map(candidateToDb).filter(Boolean);
-          transformedRows.forEach((c: any) => { if (c?.id) validCandidateIds.add(c.id); });
         } else if (tableName === 'job_openings') {
           transformedRows = rows.map(jobOpeningToDb).filter(Boolean);
-        } else if (tableName === 'interviews') {
-          transformedRows = rows.map(interviewToDb).filter(Boolean);
         } else if (tableName === 'follow_ups') {
           transformedRows = rows.map(followUpToDb).filter(Boolean);
+        } else if (tableName === 'interviews') {
+          transformedRows = rows.map(interviewToDb).filter(Boolean);
         } else if (tableName === 'offer_letters') {
           transformedRows = rows.map(offerLetterToDb).filter(Boolean);
         } else if (tableName === 'target_settings') {
           transformedRows = rows.map(targetSettingToDb).filter(Boolean);
         } else if (tableName === 'terms_clauses') {
           transformedRows = rows.map(termsClauseToDb).filter(Boolean);
-        } else if (tableName === 'audit_logs') {
-          transformedRows = rows.map(auditLogToDb).filter(Boolean);
+        }
+
+        const { error } = await client!.from(tableName).upsert(transformedRows, { onConflict: 'id' });
+        if (error) {
+          errors.push(`${tableName}: ${error.message}`);
         } else {
-          transformedRows = rows;
+          syncedCounts[tableName] = rows.length;
         }
-
-        if (transformedRows.length === 0) return;
-
-        for (let i = 0; i < transformedRows.length; i += chunkSize) {
-          const chunk = transformedRows.slice(i, i + chunkSize);
-          const { error } = await client!.from(tableName).upsert(chunk, { onConflict: 'id' });
-          if (error) {
-            errors.push(`${tableName}: ${error.message}`);
-            return;
-          }
-        }
-        syncedCounts[tableName] = transformedRows.length;
       } catch (err: any) {
         errors.push(`${tableName}: ${err?.message || 'Unknown upsert error'}`);
       }
@@ -907,95 +814,19 @@ async function startServer() {
         postedDate: row.posted_date || '2026-08-20',
       }));
 
-      const formattedDepartments = (rawDepartments || []).map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        code: row.code,
-        description: row.description || '',
-        companyId: row.company_id || 'comp-1',
-        headName: row.head_of_department || '',
-        targetHires: row.target_hires || 0,
-        currentEmployees: row.current_employees || 0,
-        dailyInterviewTarget: row.target_hires || 5,
-        isActive: Boolean(row.is_active ?? true),
-        createdAt: row.created_at,
-      }));
-
-      const formattedOfferLetters = (rawOfferLetters || []).map((row: any) => ({
-        id: row.id,
-        candidateId: row.candidate_id || undefined,
-        candidateName: row.candidate_name || '',
-        candidateEmail: row.candidate_email || '',
-        candidatePhone: row.candidate_phone || '',
-        companyId: row.company_id || '',
-        companyName: row.company_name || '',
-        companyAddress: row.company_address || '',
-        department: row.department || '',
-        designation: row.designation || '',
-        employmentType: row.employment_type || 'Full-Time',
-        workLocation: row.work_location || '',
-        reportingManager: row.reporting_manager || '',
-        offerDate: row.offer_date || new Date().toISOString().split('T')[0],
-        joiningDate: row.joining_date || '',
-        validityDate: row.validity_date || '',
-        annualCtc: Number(row.annual_ctc || 0),
-        monthlyGross: Number(row.monthly_gross || 0),
-        basicSalary: Number(row.basic_salary || 0),
-        hra: Number(row.hra || 0),
-        specialAllowance: Number(row.special_allowance || 0),
-        monthlyInHand: Number(row.monthly_in_hand || row.monthly_gross || 0),
-        probationMonths: Number(row.probation_months || 3),
-        noticePeriodDays: Number(row.notice_period_days || 30),
-        status: row.status || 'Draft',
-        authorizedSignatoryName: row.authorized_signatory_name || 'HR Director',
-        authorizedSignatoryTitle: row.authorized_signatory_title || 'Director',
-        compensationBreakup: row.compensation_breakup || undefined,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      }));
-
-      const formattedTargetSettings = (rawTargetSettings || []).map((row: any) => ({
-        id: row.id,
-        targetEntityName: row.role || 'HR Executive',
-        targetEntityType: 'Role' as const,
-        role: row.role || 'HR Executive',
-        metric: 'Daily Interviews & Active Joinings',
-        targetValue: row.daily_interviews || 8,
-        frequency: 'Daily' as const,
-        department: row.department || 'HR Recruitment',
-        companyId: row.company_id || 'comp-1',
-        minimumBenchmark: row.monthly_active_joinings || 15,
-        minCallingPerDay: row.min_calling_per_day || 60,
-        currentProgress: 0,
-        achievementRate: 100,
-        status: 'On-Track' as const,
-        updatedAt: row.updated_at,
-      }));
-
-      const formattedTermsClauses = (rawTermsClauses || []).map((row: any) => ({
-        id: row.id,
-        clauseNumber: row.clause_number || '1',
-        category: row.category || 'Code of Conduct',
-        title: row.title || '',
-        content: row.content || '',
-        isMandatoryInOffer: Boolean(row.is_mandatory_in_offer ?? true),
-        isActive: Boolean(row.is_active ?? true),
-        updatedAt: row.updated_at,
-      }));
-
       return res.json({
         success: true,
         data: {
           companies: formattedCompanies,
-          departments: formattedDepartments,
+          departments: rawDepartments || [],
           users: formattedUsers,
           candidates: formattedCandidates,
           jobOpenings: formattedJobOpenings,
           interviews: formattedInterviews,
           followUps: formattedFollowUps,
-          offerLetters: formattedOfferLetters,
-          targetSettings: formattedTargetSettings,
-          termsClauses: formattedTermsClauses,
+          offerLetters: rawOfferLetters || [],
+          targetSettings: rawTargetSettings || [],
+          termsClauses: rawTermsClauses || [],
         },
       });
     } catch (err: any) {
@@ -1003,56 +834,12 @@ async function startServer() {
     }
   });
 
-  // Helper to map company to Supabase row format
-  function companyToDbRow(c: any) {
-    if (!c) return null;
-    return {
-      id: c.id,
-      name: c.name || '',
-      code: c.code || '',
-      legal_name: c.legalName || c.legal_name || null,
-      cin: c.cin || null,
-      gstin: c.gstin || null,
-      address: c.address || '',
-      city: c.city || '',
-      state: c.state || '',
-      pincode: c.pincode || null,
-      phone: c.phone || '',
-      email: c.email || '',
-      logo_url: c.logoUrl || c.logo_url || null,
-      website: c.website || null,
-      departments: Array.isArray(c.departments) ? c.departments : [],
-      is_active: Boolean(c.isActive ?? c.is_active ?? true),
-      admin_user_id: c.adminUserId || c.admin_user_id || null,
-      admin_password: c.adminPassword || c.admin_password || null,
-      master_contact_person: c.masterContactPerson || c.master_contact_person || null,
-      last_password_changed: c.lastPasswordChanged || c.last_password_changed || null,
-      created_at: c.createdAt || c.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-  }
-
-  // 6. Direct Source Code & Supabase Sync for Companies
-  app.post('/api/companies/sync-source', async (req, res) => {
+  // 6. Direct Source Code Sync for Companies (updates src/mockData.ts)
+  app.post('/api/companies/sync-source', (req, res) => {
     try {
       const { companies } = req.body || {};
       if (!Array.isArray(companies)) {
         return res.status(400).json({ success: false, error: 'Expected an array of companies' });
-      }
-
-      // 1. Also update Supabase database immediately!
-      if (supabaseClient && companies.length > 0) {
-        try {
-          const dbRows = companies.map(companyToDbRow).filter(Boolean);
-          const { error } = await supabaseClient.from('companies').upsert(dbRows, { onConflict: 'id' });
-          if (error) {
-            console.warn('[Supabase Sync Companies] Error:', error.message);
-          } else {
-            console.log(`[Supabase Sync Companies] Synchronized ${dbRows.length} companies to database.`);
-          }
-        } catch (dbErr: any) {
-          console.warn('[Supabase Sync Companies] DB error:', dbErr?.message);
-        }
       }
 
       const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
@@ -1072,7 +859,7 @@ async function startServer() {
         console.log(`[Source Code Sync] Updated src/mockData.ts with ${companies.length} companies.`);
         return res.json({ 
           success: true, 
-          message: `Successfully synchronized ${companies.length} company records to Supabase & src/mockData.ts`,
+          message: `Successfully synchronized ${companies.length} company records to src/mockData.ts`,
           count: companies.length 
         });
       } else {
@@ -1084,108 +871,6 @@ async function startServer() {
     }
   });
 
-  // 6b. Add or Upsert Single Company API
-  app.post('/api/companies', async (req, res) => {
-    try {
-      const company = req.body;
-      if (!company || !company.id) {
-        return res.status(400).json({ success: false, error: 'Valid company object with id is required' });
-      }
-
-      // 1. Upsert into Supabase
-      if (supabaseClient) {
-        try {
-          const dbRow = companyToDbRow(company);
-          const { error } = await supabaseClient.from('companies').upsert(dbRow, { onConflict: 'id' });
-          if (error) console.warn('[Supabase Add Company] Error:', error.message);
-        } catch (dbErr: any) {
-          console.warn('[Supabase Add Company] DB error:', dbErr?.message);
-        }
-      }
-
-      // 2. Append or update in src/mockData.ts
-      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
-      if (fs.existsSync(mockDataPath)) {
-        let content = fs.readFileSync(mockDataPath, 'utf8');
-        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*(\[[\s\S]*?\n\]);/;
-        const match = content.match(regex);
-        if (match) {
-          try {
-            const list = JSON.parse(match[1]);
-            const existingIdx = list.findIndex((c: any) => c.id === company.id || (c.code && c.code === company.code));
-            if (existingIdx >= 0) {
-              list[existingIdx] = { ...list[existingIdx], ...company };
-            } else {
-              list.push(company);
-            }
-            const formatted = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(list, null, 2) + ';';
-            content = content.replace(regex, formatted);
-            fs.writeFileSync(mockDataPath, content, 'utf8');
-          } catch (jsonErr) {
-            console.warn('[MockData Add Company] JSON parse error:', jsonErr);
-          }
-        }
-      }
-
-      return res.json({ success: true, company });
-    } catch (err: any) {
-      console.error('Error adding company:', err);
-      return res.status(500).json({ success: false, error: err?.message || 'Failed to add company' });
-    }
-  });
-
-  // 6c. Batch Add/Upsert Companies API
-  app.post('/api/companies/batch', async (req, res) => {
-    try {
-      const { companies } = req.body || {};
-      if (!Array.isArray(companies) || companies.length === 0) {
-        return res.status(400).json({ success: false, error: 'Array of companies required' });
-      }
-
-      // 1. Upsert into Supabase
-      if (supabaseClient) {
-        try {
-          const dbRows = companies.map(companyToDbRow).filter(Boolean);
-          const { error } = await supabaseClient.from('companies').upsert(dbRows, { onConflict: 'id' });
-          if (error) console.warn('[Supabase Batch Companies] Error:', error.message);
-        } catch (dbErr: any) {
-          console.warn('[Supabase Batch Companies] DB error:', dbErr?.message);
-        }
-      }
-
-      // 2. Update src/mockData.ts
-      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
-      if (fs.existsSync(mockDataPath)) {
-        let content = fs.readFileSync(mockDataPath, 'utf8');
-        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*(\[[\s\S]*?\n\]);/;
-        const match = content.match(regex);
-        if (match) {
-          try {
-            const list = JSON.parse(match[1]);
-            companies.forEach((newComp: any) => {
-              const existingIdx = list.findIndex((c: any) => c.id === newComp.id || (c.code && c.code === newComp.code));
-              if (existingIdx >= 0) {
-                list[existingIdx] = { ...list[existingIdx], ...newComp };
-              } else {
-                list.push(newComp);
-              }
-            });
-            const formatted = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(list, null, 2) + ';';
-            content = content.replace(regex, formatted);
-            fs.writeFileSync(mockDataPath, content, 'utf8');
-          } catch (jsonErr) {
-            console.warn('[MockData Batch Companies] JSON parse error:', jsonErr);
-          }
-        }
-      }
-
-      return res.json({ success: true, count: companies.length });
-    } catch (err: any) {
-      console.error('Error batch adding companies:', err);
-      return res.status(500).json({ success: false, error: err?.message || 'Failed to batch add companies' });
-    }
-  });
-
   app.get('/api/companies/sync-status', (req, res) => {
     const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
     if (!fs.existsSync(mockDataPath)) {
@@ -1193,66 +878,6 @@ async function startServer() {
     }
     const stat = fs.statSync(mockDataPath);
     return res.json({ exists: true, lastModified: stat.mtime });
-  });
-
-  // 6b. Delete Company API (Deletes from Supabase AND updates src/mockData.ts)
-  app.delete('/api/companies/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-      console.log(`[Company Delete] Received request to delete company: ${id}`);
-      
-      // 1. Supabase deletion
-      if (supabaseClient) {
-        try {
-          // Unlink dependent tables to avoid foreign key violations
-          await supabaseClient.from('departments').update({ company_id: null }).eq('company_id', id);
-          await supabaseClient.from('users').update({ company_id: null }).eq('company_id', id);
-          await supabaseClient.from('candidates').update({ company_id: null }).eq('company_id', id);
-          await supabaseClient.from('job_openings').update({ company_id: null }).eq('company_id', id);
-          await supabaseClient.from('offer_letters').update({ company_id: null }).eq('company_id', id);
-          await supabaseClient.from('target_settings').update({ company_id: null }).eq('company_id', id);
-
-          const { error: err1 } = await supabaseClient.from('companies').delete().eq('id', id);
-          const { error: err2 } = await supabaseClient.from('companies').delete().eq('code', id);
-          if (err1 && err2) {
-            console.warn(`[Supabase] Could not delete company ${id}:`, err1.message);
-          } else {
-            console.log(`[Supabase] Company ${id} permanently deleted from Supabase database.`);
-          }
-        } catch (dbErr: any) {
-          console.warn(`[Supabase] Error executing delete for company ${id}:`, dbErr?.message || dbErr);
-        }
-      }
-
-      // 2. Update source code (src/mockData.ts)
-      const mockDataPath = path.join(process.cwd(), 'src', 'mockData.ts');
-      if (fs.existsSync(mockDataPath)) {
-        let content = fs.readFileSync(mockDataPath, 'utf8');
-        const regex = /export const INITIAL_COMPANIES:\s*Company\[\]\s*=\s*\[([\s\S]*?)\n\];/;
-        const match = content.match(regex);
-        if (match) {
-          try {
-            const rawArrayStr = '[' + match[1] + ']';
-            const existingCompanies = JSON.parse(rawArrayStr);
-            const filtered = existingCompanies.filter((c: any) => c.id !== id && c.code !== id);
-            const formattedArray = 'export const INITIAL_COMPANIES: Company[] = ' + JSON.stringify(filtered, null, 2) + ';';
-            content = content.replace(regex, formattedArray);
-            fs.writeFileSync(mockDataPath, content, 'utf8');
-            console.log(`[Source Code Sync] Removed company ${id} from src/mockData.ts. Remaining: ${filtered.length}`);
-          } catch (jsonErr) {
-            console.warn('[Source Code Sync] Error updating mockData.ts JSON:', jsonErr);
-          }
-        }
-      }
-
-      return res.json({ 
-        success: true, 
-        message: `Company ${id} deleted successfully from Supabase database and source code.` 
-      });
-    } catch (err: any) {
-      console.error(`Error removing company ${id}:`, err);
-      return res.status(500).json({ success: false, error: err?.message || 'Failed to delete company' });
-    }
   });
 
   // 7. Delete User API
@@ -1287,6 +912,117 @@ async function startServer() {
     } catch (err: any) {
       console.error(`Error updating user status for ${id}:`, err);
       return res.status(500).json({ success: false, error: err?.message || 'Failed to update user status' });
+    }
+  });
+
+  // 9. Single Company Upsert API
+  app.post('/api/companies', async (req, res) => {
+    try {
+      const company = req.body;
+      if (!company || !company.name) {
+        return res.status(400).json({ success: false, error: 'Company name and data required' });
+      }
+
+      if (supabaseClient) {
+        const dbComp = {
+          id: company.id,
+          name: company.name || '',
+          code: company.code || '',
+          legal_name: company.legalName || company.legal_name || company.name || '',
+          cin: company.cin || null,
+          gstin: company.gstin || null,
+          address: company.address || '',
+          city: company.city || 'Noida',
+          state: company.state || 'Uttar Pradesh',
+          pincode: company.pincode || '201301',
+          phone: company.phone || '',
+          email: company.email || '',
+          logo_url: company.logoUrl || company.logo_url || null,
+          website: company.website || null,
+          departments: Array.isArray(company.departments) ? company.departments : ['HR Recruitment'],
+          is_active: Boolean(company.isActive ?? company.is_active ?? true),
+          admin_user_id: company.adminUserId || company.admin_user_id || `${(company.code || 'comp').toLowerCase()}.admin`,
+          admin_password: company.adminPassword || company.admin_password || `${company.code || 'ESL'}@Corp2026`,
+          master_contact_person: company.masterContactPerson || company.master_contact_person || 'Director / Managing Head',
+          last_password_changed: company.lastPasswordChanged || company.last_password_changed || new Date().toISOString(),
+          created_at: company.createdAt || company.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = await supabaseClient.from('companies').upsert(dbComp, { onConflict: 'id' });
+        if (error) {
+          console.warn('[Supabase Companies Upsert Warning]:', error.message);
+        }
+      }
+
+      return res.json({ success: true, company });
+    } catch (err: any) {
+      console.error('[API Companies Error]:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to save company' });
+    }
+  });
+
+  // 10. Batch Companies Registration API
+  app.post('/api/companies/batch', async (req, res) => {
+    try {
+      const { companies } = req.body || {};
+      if (!Array.isArray(companies)) {
+        return res.status(400).json({ success: false, error: 'Expected an array of companies' });
+      }
+
+      if (supabaseClient && companies.length > 0) {
+        const dbComps = companies.map((company: any) => ({
+          id: company.id,
+          name: company.name || '',
+          code: company.code || '',
+          legal_name: company.legalName || company.legal_name || company.name || '',
+          cin: company.cin || null,
+          gstin: company.gstin || null,
+          address: company.address || '',
+          city: company.city || 'Noida',
+          state: company.state || 'Uttar Pradesh',
+          pincode: company.pincode || '201301',
+          phone: company.phone || '',
+          email: company.email || '',
+          logo_url: company.logoUrl || company.logo_url || null,
+          website: company.website || null,
+          departments: Array.isArray(company.departments) ? company.departments : ['HR Recruitment'],
+          is_active: Boolean(company.isActive ?? company.is_active ?? true),
+          admin_user_id: company.adminUserId || company.admin_user_id || `${(company.code || 'comp').toLowerCase()}.admin`,
+          admin_password: company.adminPassword || company.admin_password || `${company.code || 'ESL'}@Corp2026`,
+          master_contact_person: company.masterContactPerson || company.master_contact_person || 'Director / Managing Head',
+          last_password_changed: company.lastPasswordChanged || company.last_password_changed || new Date().toISOString(),
+          created_at: company.createdAt || company.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }));
+
+        const { error } = await supabaseClient.from('companies').upsert(dbComps, { onConflict: 'id' });
+        if (error) {
+          console.warn('[Supabase Batch Companies Warning]:', error.message);
+        }
+      }
+
+      return res.json({ success: true, count: companies.length });
+    } catch (err: any) {
+      console.error('[Batch Companies Error]:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to batch register companies' });
+    }
+  });
+
+  // 11. Delete Company API
+  app.delete('/api/companies/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      if (supabaseClient) {
+        const { error } = await supabaseClient.from('companies').delete().eq('id', id);
+        if (error) {
+          console.warn(`[Supabase] Could not delete company ${id}:`, error.message);
+        }
+      }
+      return res.json({ success: true, message: `Company ${id} deleted successfully` });
+    } catch (err: any) {
+      console.error(`Error deleting company ${id}:`, err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to delete company' });
     }
   });
 

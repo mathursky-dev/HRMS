@@ -221,6 +221,13 @@ export const CandidateModal: React.FC<CandidateModalProps> = ({
   if (!isOpen) return null;
 
   const executeSave = (finalWa: string, forceAllow: boolean = false) => {
+    const matchedComp = companies.find(c => 
+      c.id === formData.companyId || 
+      (c.code && c.code.toLowerCase() === formData.companyId.toLowerCase())
+    );
+    const resolvedCompanyId = matchedComp?.id || formData.companyId;
+    const resolvedCompanyName = matchedComp?.name || candidateToEdit?.companyName;
+
     if (candidateToEdit) {
       updateCandidate(
         candidateToEdit.id,
@@ -235,7 +242,8 @@ export const CandidateModal: React.FC<CandidateModalProps> = ({
           city: formData.city,
           area: formData.area,
           address: formData.address,
-          companyId: formData.companyId,
+          companyId: resolvedCompanyId,
+          companyName: resolvedCompanyName,
           positionApplied: formData.positionApplied,
           department: formData.department,
           qualification: formData.qualification,
@@ -267,7 +275,8 @@ export const CandidateModal: React.FC<CandidateModalProps> = ({
           city: formData.city,
           area: formData.area,
           address: formData.address,
-          companyId: formData.companyId,
+          companyId: resolvedCompanyId,
+          companyName: resolvedCompanyName,
           positionApplied: formData.positionApplied,
           department: formData.department,
           qualification: formData.qualification,

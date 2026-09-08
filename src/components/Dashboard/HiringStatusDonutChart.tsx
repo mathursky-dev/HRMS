@@ -18,7 +18,7 @@ import {
   Sparkles,
   ExternalLink
 } from 'lucide-react';
-import { getSupabaseClient } from '../../lib/supabase';
+import { getSupabaseClient, getSupabaseUrl, getSupabaseAnonKey } from '../../lib/supabase';
 import { useRecruitment } from '../../context/RecruitmentContext';
 
 /**
@@ -299,13 +299,13 @@ export const HiringStatusDonutChart: React.FC<HiringStatusDonutChartProps> = ({
   const [departmentFilter, setDepartmentFilter] = useState<string>('ALL');
   const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null);
 
-  // Fetch candidates from Supabase 'candidates' table
+  // Fetch candidates from Supabase (works reliably on Vercel, localhost, and container deployments)
   const fetchSupabaseCandidates = useCallback(async () => {
     setLoading(true);
     setError(null);
 
+    // 1. Direct Supabase query via SupabaseClient (Ideal for Vercel & client-side environments)
     try {
-      // 1. Attempt direct Supabase query using configured client
       const client = getSupabaseClient();
       if (client) {
         const { data, error: sbError } = await client
@@ -313,22 +313,55 @@ export const HiringStatusDonutChart: React.FC<HiringStatusDonutChartProps> = ({
           .select('id, status, full_name, department, company_name, created_at')
           .limit(2000);
 
-        if (!sbError && data && Array.isArray(data)) {
+        if (!sbError && data && Array.isArray(data) && data.length > 0) {
           setCandidatesData(data);
           setDataSource('supabase');
           setLastFetchedAt(new Date());
           setLoading(false);
           return;
-        } else if (sbError) {
-          console.warn('[HiringStatusDonutChart] Direct Supabase error, trying API proxy:', sbError.message);
         }
       }
+    } catch {
+      // Continue to next check
+    }
 
-      // 2. Attempt proxy fetch through server endpoint /api/supabase/data
+    // 2. Direct HTTP REST fetch to Supabase (bypasses SDK quirks on certain edge network configurations)
+    try {
+      const currentUrl = getSupabaseUrl();
+      const anonKey = getSupabaseAnonKey();
+      if (currentUrl && anonKey && currentUrl.startsWith('http')) {
+        const res = await fetch(`${currentUrl}/rest/v1/candidates?select=id,status,full_name,department,company_name,created_at&limit=2000`, {
+          headers: {
+            apikey: anonKey,
+            Authorization: `Bearer ${anonKey}`,
+            Accept: 'application/json',
+          },
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const directRows = await res.json();
+          if (Array.isArray(directRows) && directRows.length > 0) {
+            setCandidatesData(directRows);
+            setDataSource('supabase');
+            setLastFetchedAt(new Date());
+            setLoading(false);
+            return;
+          }
+        }
+      }
+    } catch {
+      // Continue to next check
+    }
+
+    // 3. Attempt server-side proxy fetch (active when running in fullstack Express container)
+    try {
       const res = await fetch('/api/supabase/data');
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      // CRITICAL FOR VERCEL: Only parse JSON if content-type is strictly application/json!
+      // On Vercel, unmatched /api routes return 200 HTML (index.html) which causes "Unexpected token '<'".
+      if (res.ok && contentType.includes('application/json')) {
         const json = await res.json();
-        if (json.success && Array.isArray(json.data?.candidates)) {
+        if (json.success && Array.isArray(json.data?.candidates) && json.data.candidates.length > 0) {
           const mappedRows: CandidateRow[] = json.data.candidates.map((c: any) => ({
             id: c.id,
             status: c.status || 'New Lead',
@@ -344,49 +377,31 @@ export const HiringStatusDonutChart: React.FC<HiringStatusDonutChartProps> = ({
           return;
         }
       }
+    } catch {
+      // Server proxy not active or reachable on Vercel deployment
+    }
 
-      // 3. If neither Supabase client nor API returns candidates, check if we have local fallback
-      if (fallbackCandidates && fallbackCandidates.length > 0) {
-        const localRows: CandidateRow[] = fallbackCandidates.map((c) => ({
-          id: c.id,
-          status: c.status,
-          full_name: c.fullName,
-          department: c.department,
-          company_name: c.companyName,
-          created_at: c.createdAt,
-        }));
-        setCandidatesData(localRows);
-        setDataSource('local');
-        setLastFetchedAt(new Date());
-        setLoading(false);
-        return;
-      }
-
-      // No data available from any source
-      setCandidatesData([]);
+    // 4. Graceful fallback to context candidates if present
+    if (fallbackCandidates && fallbackCandidates.length > 0) {
+      const localRows: CandidateRow[] = fallbackCandidates.map((c) => ({
+        id: c.id,
+        status: c.status,
+        full_name: c.fullName,
+        department: c.department,
+        company_name: c.companyName,
+        created_at: c.createdAt,
+      }));
+      setCandidatesData(localRows);
+      setDataSource('local');
       setLastFetchedAt(new Date());
       setLoading(false);
-    } catch (err: any) {
-      console.error('[HiringStatusDonutChart] Fetch error:', err);
-      // Fall back gracefully to context candidates if present
-      if (fallbackCandidates && fallbackCandidates.length > 0) {
-        const localRows: CandidateRow[] = fallbackCandidates.map((c) => ({
-          id: c.id,
-          status: c.status,
-          full_name: c.fullName,
-          department: c.department,
-          company_name: c.companyName,
-          created_at: c.createdAt,
-        }));
-        setCandidatesData(localRows);
-        setDataSource('local');
-        setLastFetchedAt(new Date());
-        setLoading(false);
-      } else {
-        setError(err?.message || 'Unable to connect to Supabase candidates table.');
-        setLoading(false);
-      }
+      return;
     }
+
+    // 5. Default empty state
+    setCandidatesData([]);
+    setLastFetchedAt(new Date());
+    setLoading(false);
   }, [fallbackCandidates]);
 
   // Initial load
